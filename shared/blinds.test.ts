@@ -29,8 +29,13 @@ describe('blind generation and setup validation', () => {
     { name: '' }, { name: 'x'.repeat(61) }, { multiplier: 1 }, { multiplier: Infinity },
     { levelMinutes: 0 }, { levelMinutes: 181 }, { smallBlind: 100, bigBlind: 10 },
     { startingStack: 125005 }, { ante: -5 }, { anteMode: 'bad' },
+    { durationMinutes: 4 }, { durationMinutes: 721 }, { durationMinutes: 1.5 },
+    { durationMinutes: -1 }, { durationMinutes: Infinity }, { durationMinutes: NaN },
   ])('rejects invalid setup field %o', overrides => {
     expect(validateConfig({ ...DEFAULT_CONFIG, ...overrides } as typeof DEFAULT_CONFIG).length).toBeGreaterThan(0);
+  });
+  it.each([0, 5, 720])('accepts time limit %i', durationMinutes => {
+    expect(validateConfig({ ...DEFAULT_CONFIG, durationMinutes })).toEqual([]);
   });
   it('keeps late blind levels capped and makeable for nondecimal chip units', () => {
     const c = { ...DEFAULT_CONFIG, denominations: [{ value: 3, color: '#C0392B' }, { value: 15, color: '#F2EDE3' }], smallBlind: 3, bigBlind: 6 };

@@ -30,5 +30,7 @@ export function GameOver({ snapshot }: { snapshot: Snapshot }) {
   const { game } = snapshot;
   if (game.phase !== 'tournament-over') return null;
   const ordered = standings(game);
-  return <section className="game-panel game-over"><span className="eyebrow">Last player standing</span><div className="champion-symbol">♠</div><h1>{ordered[0]?.player.name} wins.</h1><p>A good night at the table.</p><ol>{ordered.map(({ player, place }) => <li key={player.id}><span>#{place}</span><strong>{player.name}</strong><span>{money(player.stack)}</span></li>)}</ol></section>;
+  const endedOnTime = game.players.filter(player => player.stack > 0).length > 1;
+  const leaders = ordered.filter(({ place }) => place === 1).map(({ player }) => player.name);
+  return <section className="game-panel game-over"><span className="eyebrow">{endedOnTime ? 'Time — final chip counts' : 'Last player standing'}</span><div className="champion-symbol">♠</div><h1>{leaders.join(' and ')} {leaders.length > 1 ? 'tie.' : 'wins.'}</h1><p>{endedOnTime ? 'The clock ran out. Standings by chips.' : 'A good night at the table.'}</p><ol>{ordered.map(({ player, place }) => <li key={player.id}><span>#{place}</span><strong>{player.name}</strong><span>{money(player.stack)}</span></li>)}</ol></section>;
 }

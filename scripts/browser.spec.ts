@@ -1,6 +1,7 @@
 import { expect, test, type Browser, type Page } from '@playwright/test';
 import type { Snapshot } from '../shared/types';
-import { createGame } from '../server/engine/state';
+import { createGame, createPlayer } from '../server/engine/state';
+import { finishHand } from '../server/engine/tournament';
 
 // Observe the same full snapshots the UI receives; actions still use real UI.
 // Separate contexts are essential: each phone needs independent localStorage.
@@ -51,6 +52,15 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
     await alice.page.locator('.brand').click();
     await expect(alice.page.getByRole('heading', { name: /You’re in, Alice/ })).toBeVisible();
     await expect(board.getByRole('button', { name: /Start tournament/i })).toBeEnabled();
+    const turbo = board.getByRole('button', { name: 'Turbo', exact: true });
+    await turbo.click();
+    await expect(board.getByLabel('Level length (min)')).toHaveValue('8');
+    await expect(board.getByLabel('Custom multiplier')).toHaveValue('2');
+    await expect(board.getByLabel('Time limit (min)')).toHaveValue('60');
+    await expect(turbo).toHaveClass('selected');
+    await board.getByLabel('Time limit (min)').fill('90');
+    await expect(turbo).not.toHaveClass('selected');
+    await expect.poll(() => snapshot()?.game.phase).toBe('lobby');
     await board.screenshot({ path: 'test-results/setup-desktop.png', fullPage: true });
     await board.setViewportSize({ width: 390, height: 844 });
     await expect.poll(() => board.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -61,6 +71,24 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
     await board.goto('/board');
     await expect.poll(() => snapshot()?.game.players.length).toBe(3);
     expect(balances(snapshot())).toEqual([500, 495, 490]); verifyAccounting(snapshot());
+    await expect(board.getByText('Game ends in', { exact: true })).toBeVisible();
+    await expect(bob.page.getByRole('button', { name: 'Blinds ↑', exact: true })).toHaveCount(0);
+    await expect(alice.page.getByRole('button', { name: 'Blinds ↓', exact: true })).toBeDisabled();
+    await board.getByRole('button', { name: /Pause clock/ }).click();
+    await expect.poll(() => snapshot()?.game.clockPaused).toBe(true);
+    const elapsed = snapshot().game.elapsedMs;
+    await board.getByRole('button', { name: 'Blinds ↑', exact: true }).click();
+    await expect.poll(() => snapshot()?.game.pendingLevel).toBe(2);
+    expect(snapshot().game.level).toBe(1);
+    expect(snapshot().game.elapsedMs).toBe(elapsed);
+    await expect(board.locator('.blind-timer')).toContainText('Blinds up next hand · level 2');
+    await expect.poll(() => alice.snapshot()?.game.pendingLevel).toBe(2);
+    await alice.page.getByRole('button', { name: 'Blinds ↓', exact: true }).click();
+    await expect.poll(() => snapshot()?.game.pendingLevel).toBe(1);
+    expect(snapshot().game.elapsedMs).toBe(elapsed);
+    await expect(board.getByRole('button', { name: 'Blinds ↓', exact: true })).toBeDisabled();
+    await board.getByRole('button', { name: /Resume clock/ }).click();
+    await expect.poll(() => snapshot()?.game.clockPaused).toBe(false);
     await expect(board.locator('.join-corner .qr-well canvas')).toBeVisible();
     await expect(board.locator('.board-sidebar .join-panel')).toHaveCount(0);
     await board.getByRole('button', { name: 'Enlarge join QR code' }).click();
@@ -207,6 +235,45 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
   } finally { await Promise.all(phones.map(phone => phone.context.close())); }
 });
 
+
+test('time limit shows the final hand and ranks surviving stacks on board and phone', async ({ page }) => {
+  const game = createGame();
+  game.config.durationMinutes = 5;
+  game.elapsedMs = 300_000;
+  game.phase = 'betting';
+  game.clockPaused = false;
+  game.hand = 1;
+  game.players = [createPlayer('alice', 'Alice', 0, 300), createPlayer('bob', 'Bob', 1, 600), createPlayer('cara', 'Cara', 2, 600)];
+  game.totalChips = 1500;
+  const snapshot: Snapshot = {
+    game, you: { id: 'alice', host: true, dealer: true, legal: null },
+    joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: true, serverTime: Date.now(),
+  };
+  let publish = () => {};
+  await page.routeWebSocket('**/ws', socket => {
+    publish = () => socket.send(JSON.stringify({ type: 'state', snapshot }));
+    socket.onMessage(publish);
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await expect(page.locator('.player-hand .blind-timer')).toContainText('Game ends in');
+  await expect(page.locator('.player-hand .blind-timer')).toContainText('00:00');
+  await expect(page.getByText("Time's up · final hand", { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: 'test-results/time-limit-mobile.png', fullPage: true });
+  finishHand(game);
+  publish();
+  await expect(page.locator('.game-over')).toContainText('Time — final chip counts');
+  await expect(page.locator('.game-over')).toContainText('The clock ran out. Standings by chips.');
+  await expect(page.getByRole('heading', { name: 'Bob and Cara tie.', exact: true })).toBeVisible();
+  await expect(page.locator('.game-over li')).toHaveText(['#1Bob$600', '#1Cara$600', '#3Alice$300']);
+  await expect(page.getByRole('button', { name: 'Blinds ↑', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Blinds ↓', exact: true })).toBeDisabled();
+  await page.goto('/board');
+  await expect(page.locator('.game-over li')).toHaveText(['#1Bob$600', '#1Cara$600', '#3Alice$300']);
+  await expect(page.getByText("Time's up · final hand", { exact: true })).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
 
 test('expanded corner QR has one address picker and preserves its selection when closed', async ({ page }) => {
   const urls = ['http://192.168.1.2:3000', 'http://10.0.0.2:3000'];

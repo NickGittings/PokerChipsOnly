@@ -1,12 +1,14 @@
 import type { GameState } from '../../shared/types';
 import { chipUnit } from '../../shared/chips';
 import { blindLevel } from '../../shared/blinds';
-import { placeOf } from '../../shared/standings';
+import { placeOf, standings } from '../../shared/standings';
+import { timeUp } from '../../shared/clock';
 import { log } from './helpers';
 export function tickClock(state: GameState, now: number): GameState {
   const g = structuredClone(state);
   if (!g.clockPaused && !['lobby', 'tournament-over'].includes(g.phase)) {
-    g.clockRemainingMs -= Math.max(0, now - g.clockUpdatedAt);
+    const elapsed = Math.max(0, now - g.clockUpdatedAt);
+    g.clockRemainingMs -= elapsed; g.elapsedMs += elapsed;
     const length = g.config.levelMinutes * 60_000;
     if (g.clockRemainingMs <= 0) { const levels = Math.floor(-g.clockRemainingMs / length) + 1; g.pendingLevel += levels; g.clockRemainingMs += levels * length; }
   }
@@ -24,6 +26,11 @@ export function finishHand(g: GameState) {
   g.actorId = null; g.currentBet = 0;
   g.phase = alive.length === 1 ? 'tournament-over' : 'hand-complete';
   if (alive.length === 1) { g.clockPaused = true; log(g, `${alive[0].name} wins the tournament!`); }
+  else if (timeUp(g)) {
+    g.phase = 'tournament-over'; g.clockPaused = true;
+    const leaders = standings(g).filter(({ place }) => place === 1).map(({ player }) => player.name);
+    log(g, leaders.length === 1 ? `Time's up — ${leaders[0]} wins on chips.` : `Time's up — ${leaders.join(' and ')} tie on chips.`);
+  }
 }
 export function adjustStack(state: GameState, id: string, delta: number) {
   const g = structuredClone(state), p = g.players.find(p => p.id === id), unit = chipUnit(g.config.denominations);
@@ -32,8 +39,16 @@ export function adjustStack(state: GameState, id: string, delta: number) {
   p.stack += delta; g.totalChips += delta;
   if (p.stack > 0) { p.status = 'active'; delete p.bustOrder; }
   else { p.status = 'busted'; p.bustOrder = ++g.bustSequence; }
-  if (g.phase !== 'lobby') g.phase = g.players.filter(p => p.stack > 0).length > 1 ? 'hand-complete' : 'tournament-over';
+  if (!(g.phase === 'tournament-over' && timeUp(g))) g.phase = g.players.filter(p => p.stack > 0).length > 1 ? 'hand-complete' : 'tournament-over';
   log(g, `Host adjusted ${p.name}: ${delta > 0 ? '+' : ''}${delta} chips.`); return g;
+}
+export function adjustLevel(state: GameState, delta: number) {
+  if (['lobby', 'tournament-over'].includes(state.phase)) throw new Error('Adjust blinds only during a live tournament.');
+  if (delta !== 1 && delta !== -1) throw new Error('Move the blind level up or down by one.');
+  if (state.pendingLevel + delta < 1) throw new Error('Blinds cannot drop below level 1.');
+  const g = structuredClone(state);
+  g.pendingLevel += delta; g.clockRemainingMs = g.config.levelMinutes * 60_000;
+  log(g, `Host moved blinds ${delta > 0 ? 'up' : 'down'} to level ${g.pendingLevel}.`); return g;
 }
 export function colorUpSuggested(g: GameState) { return g.config.denominations.length > 2 && chipUnit(g.config.denominations) < blindLevel(g.config, g.level).small / 10; }
 export function colorUp(state: GameState) {

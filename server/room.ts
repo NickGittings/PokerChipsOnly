@@ -7,7 +7,7 @@ import { createGame, createPlayer, startHand, startTournament } from './engine/s
 import { applyAction, legalActions } from './engine/betting';
 import { advanceStreet } from './engine/streets';
 import { awardPots } from './engine/pots';
-import { adjustStack, colorUp, tickClock } from './engine/tournament';
+import { adjustLevel, adjustStack, colorUp, tickClock } from './engine/tournament';
 import { assertChips, log } from './engine/helpers';
 interface Identity { id: string; name: string; board?: boolean }
 interface Peer { token: string; board: boolean }
@@ -28,6 +28,7 @@ export class Room {
       const saved = JSON.parse(readFileSync(file, 'utf8'));
       if (saved.version !== 2) throw new Error('Unsupported save file version. Preserve the file before resetting.');
       this.game = saved.game; this.identities = saved.identities; this.hostToken = saved.hostToken;
+      this.game.elapsedMs ??= 0; this.game.config.durationMinutes ??= 0;
       if (this.joinUrls.includes(saved.joinUrl)) this.joinUrl = saved.joinUrl;
       assertChips(this.game); this.game.players.forEach(p => p.connected = false);
       this.game.clockPaused = true; this.game.clockUpdatedAt = Date.now(); log(this.game, 'Game recovered. Clock paused — resume when the table is ready.');
@@ -90,7 +91,7 @@ export class Room {
       const peer = this.peers.get(ws); if (!peer) throw new Error('Join the room first.');
       const id = this.identities[peer.token].id, dealer = peer.board || peer.token === this.hostToken;
       if (!['claimSeat', 'leaveSeat', 'reclaimSeat', 'lateBuyIn', 'rebuy', 'action'].includes(msg.type) && !dealer) throw new Error('Only the host or table board can do that.');
-      const needsRevision = ['action', 'dealerConfirm', 'nextHand', 'undo', 'pauseClock', 'awardPot', 'hostAdjust', 'colorUp'].includes(msg.type);
+      const needsRevision = ['action', 'dealerConfirm', 'nextHand', 'undo', 'pauseClock', 'awardPot', 'hostAdjust', 'adjustLevel', 'colorUp'].includes(msg.type);
       if (needsRevision && (!('revision' in msg) || !Number.isInteger(msg.revision) || msg.revision !== this.game.revision)) throw new Error('The table changed. Review the latest state and try again.');
       if (msg.type === 'setJoinUrl') {
         if (!this.joinUrls.includes(msg.url)) throw new Error('Choose one of the available join URLs.');
@@ -140,11 +141,12 @@ export class Room {
       else if (msg.type === 'awardPot') next = awardPots(this.game, msg.potIndex, msg.winnerIds);
       else if (msg.type === 'nextHand') next = startHand(this.game);
       else if (msg.type === 'hostAdjust') next = adjustStack(this.game, msg.playerId, msg.delta);
+      else if (msg.type === 'adjustLevel') next = adjustLevel(this.game, msg.delta);
       else if (msg.type === 'colorUp') next = colorUp(this.game);
       else if (msg.type === 'pauseClock') { next = tickClock(this.game, Date.now()); next.clockPaused = !next.clockPaused; log(next, next.clockPaused ? 'Clock paused.' : 'Clock resumed.'); }
       else if (msg.type === 'undo') {
         const previous = this.undoStack.at(-1)?.game; if (!previous) throw new Error('Nothing to undo.');
-        next = structuredClone(previous); next.clockRemainingMs = this.game.clockRemainingMs; next.clockUpdatedAt = Date.now(); next.pendingLevel = Math.max(next.pendingLevel, this.game.pendingLevel); next.clockPaused = this.game.phase === 'tournament-over' && next.phase !== 'tournament-over' ? previous.clockPaused : this.game.clockPaused;
+        next = structuredClone(previous); next.clockRemainingMs = this.game.clockRemainingMs; next.elapsedMs = this.game.elapsedMs; next.clockUpdatedAt = Date.now(); next.pendingLevel = this.game.pendingLevel; next.clockPaused = this.game.phase === 'tournament-over' && next.phase !== 'tournament-over' ? previous.clockPaused : this.game.clockPaused;
         next.logSequence = this.game.logSequence; log(next, 'Host undid the last change.');
       } else throw new Error('Unknown message.');
       assertChips(next);
@@ -154,7 +156,7 @@ export class Room {
         for (const { token, before, after } of this.undoStack.pop()!.retired) {
           if (this.identities[token]?.id === after && !Object.values(this.identities).some(identity => identity.id === before)) this.identities[token].id = before;
         }
-      } else if (msg.type !== 'pauseClock' && !seatChurn) {
+      } else if (msg.type !== 'pauseClock' && msg.type !== 'adjustLevel' && !seatChurn) {
         const retired = displacedId ? this.retireIdentity(displacedId) : [];
         this.undoStack.push({ game: structuredClone(this.game), retired }); this.undoStack = this.undoStack.slice(-100);
       }

@@ -9,10 +9,13 @@ import type { GameState, Player } from './types';
 const key = (p: Player) => p.stack > 0 ? Infinity : p.bustOrder ?? -Infinity;
 
 export function standings(g: GameState): { player: Player; place: number }[] {
+  // At the finish, surviving players are ranked by chips; eliminated players
+  // retain their elimination order, including players whose seats were taken.
+  const compare = (a: Player, b: Player) => g.phase === 'tournament-over' && a.stack > 0 && b.stack > 0 ? b.stack - a.stack : (key(b) > key(a) ? 1 : key(b) < key(a) ? -1 : 0);
   const ordered = [...g.players, ...g.eliminated]
     .filter(p => p.stack > 0 || p.bustOrder !== undefined)
-    .sort((a, b) => key(b) - key(a) || a.seat - b.seat);
-  return ordered.map(player => ({ player, place: 1 + ordered.filter(other => key(other) > key(player)).length }));
+    .sort((a, b) => compare(a, b) || a.seat - b.seat);
+  return ordered.map(player => ({ player, place: 1 + ordered.filter(other => compare(other, player) < 0).length }));
 }
 
 // The rank a busted or tournament-ending player should display, or undefined
