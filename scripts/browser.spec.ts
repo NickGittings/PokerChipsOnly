@@ -1,5 +1,6 @@
 import { expect, test, type Browser, type Page } from '@playwright/test';
 import type { Snapshot } from '../shared/types';
+import { createGame } from '../server/engine/state';
 
 // Observe the same full snapshots the UI receives; actions still use real UI.
 // Separate contexts are essential: each phone needs independent localStorage.
@@ -34,10 +35,14 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
   await board.setViewportSize({ width: 1440, height: 1000 });
   const snapshot = watch(board); await board.goto('/board');
   await expect.poll(() => snapshot()?.you.dealer).toBe(true);
+  await expect(board.locator('.join-corner')).toHaveCount(0);
+  await expect(board.locator('.board-sidebar .join-panel')).toBeVisible();
   const alice = await phone(browser, 'Alice', 0), bob = await phone(browser, 'Bob', 1), cara = await phone(browser, 'Cara', 2);
   const phones = [alice, bob, cara];
   try {
     await board.goto('/setup');
+    await expect(board.locator('.join-large .qr-well canvas')).toBeVisible();
+    await expect(board.locator('.join-large .join-url')).toHaveText('http://127.0.0.1:3301');
     // The elected phone host can visit setup without losing its live connection.
     await expect.poll(() => alice.snapshot()?.you.host).toBe(true);
     await alice.page.getByRole('link', { name: /Set up & start/ }).click();
@@ -56,6 +61,53 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
     await board.goto('/board');
     await expect.poll(() => snapshot()?.game.players.length).toBe(3);
     expect(balances(snapshot())).toEqual([500, 495, 490]); verifyAccounting(snapshot());
+    await expect(board.locator('.join-corner .qr-well canvas')).toBeVisible();
+    await expect(board.locator('.board-sidebar .join-panel')).toHaveCount(0);
+    await board.getByRole('button', { name: 'Enlarge join QR code' }).click();
+    await expect(board.getByRole('dialog', { name: 'Join the table', exact: true })).toBeVisible();
+    await board.keyboard.press('Escape');
+    await expect(board.getByRole('button', { name: 'Enlarge join QR code' })).toBeFocused();
+    await board.setViewportSize({ width: 390, height: 844 });
+    await expect(board.getByRole('button', { name: 'Enlarge join QR code' })).toBeVisible();
+    await board.getByRole('button', { name: 'Enlarge join QR code' }).click();
+    await expect(board.locator('.join-qr-overlay .qr-well canvas')).toBeVisible();
+    await expect.poll(() => board.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await board.locator('.join-qr-overlay').click({ position: { x: 3, y: 3 } });
+    await expect(board.getByRole('dialog')).toHaveCount(0);
+    await board.setViewportSize({ width: 1440, height: 1000 });
+
+    // Losing site data mid-hand offers names and preserves the seat, chips, and turn.
+    const bobBefore = bob.snapshot().game.players.find(p => p.id === bob.snapshot().you.id)!;
+    await bob.page.evaluate(() => localStorage.clear()); await bob.page.reload();
+    await expect(bob.page.getByRole('heading', { name: 'Who are you?', exact: true })).toBeVisible();
+    await expect(bob.page.locator('.reclaim-player').first()).toContainText('Bob');
+    await expect(bob.page.locator('.reclaim-player').first()).toContainText('Offline');
+    await expect(bob.page.getByRole('button', { name: 'Join as a new player' })).toHaveCount(0);
+    await bob.page.getByRole('button', { name: 'Reclaim Bob, Seat 2', exact: true }).click();
+    await expect.poll(() => bob.snapshot()?.you.id).toBe(bobBefore.id);
+    expect(bob.snapshot().game.players.find(p => p.id === bobBefore.id)).toEqual(bobBefore);
+    await expect(bob.page.locator('.your-stack')).toContainText('495');
+
+    // A live duplicate protects the seat until its last connection closes.
+    const aliceBefore = alice.snapshot().game.players.find(p => p.id === alice.snapshot().you.id)!;
+    const oldToken = await alice.page.evaluate(() => localStorage.getItem('poker-device')!);
+    const oldContext = await browser.newContext({ baseURL: 'http://127.0.0.1:3301' });
+    try {
+      await oldContext.addInitScript(token => localStorage.setItem('poker-device', token), oldToken);
+      const oldPage = await oldContext.newPage(), oldSnapshot = watch(oldPage);
+      await oldPage.goto('/'); await expect.poll(() => oldSnapshot()?.you.id).toBe(aliceBefore.id);
+      await alice.page.evaluate(() => localStorage.clear()); await alice.page.reload();
+      await expect(alice.page.getByRole('heading', { name: 'Who are you?', exact: true })).toBeVisible();
+      const reclaimAlice = alice.page.getByRole('button', { name: 'Reclaim Alice, Seat 1', exact: true });
+      await expect(reclaimAlice).toBeDisabled();
+      await oldContext.close();
+      await expect(reclaimAlice).toBeEnabled();
+      await reclaimAlice.click();
+      await expect.poll(() => alice.snapshot()?.you.id).toBe(aliceBefore.id);
+      expect(alice.snapshot().game.players.find(p => p.id === aliceBefore.id)).toEqual(aliceBefore);
+      expect(alice.snapshot().you.legal).not.toBeNull();
+      expect(await alice.page.evaluate(() => localStorage.getItem('poker-name'))).toBe('Alice');
+    } finally { await oldContext.close(); }
     await board.screenshot({ path: 'test-results/board.png', fullPage: true });
     await alice.page.screenshot({ path: 'test-results/player-mobile.png', fullPage: true });
     await expect.poll(() => alice.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -128,5 +180,58 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
     await award('Cara');
     expect(balances(snapshot())).toEqual([50, 1410, 40]);
     expect(snapshot().game.phase).toBe('hand-complete'); verifyAccounting(snapshot());
+
+    // Between hands, a busted player can rebuy or a newcomer can take the chair.
+    await board.getByText('Adjust a stack', { exact: true }).click();
+    await board.getByLabel('Player', { exact: true }).selectOption(aliceId);
+    await board.getByLabel('Add or subtract chips').fill('-50');
+    await board.getByRole('button', { name: 'Apply', exact: true }).click();
+    const rebuy = alice.page.getByRole('button', { name: 'Buy back in for $500', exact: true });
+    await expect(rebuy).toBeVisible();
+    await rebuy.click();
+    await expect.poll(() => snapshot().game.players.find(p => p.id === aliceId)?.stack).toBe(500);
+    expect(snapshot().game.totalChips).toBe(1950); verifyAccounting(snapshot());
+    await board.getByRole('button', { name: /Undo last action/ }).click();
+    await expect(rebuy).toBeVisible();
+    const newcomerContext = await browser.newContext({ baseURL: 'http://127.0.0.1:3301' });
+    try {
+      const newcomer = await newcomerContext.newPage(); await newcomer.goto('/');
+      await newcomer.getByRole('button', { name: 'Join as a new player' }).click();
+      await newcomer.getByLabel('Your name').fill('Dan');
+      await newcomer.getByRole('button', { name: 'Seat 1', exact: true }).click();
+      await newcomer.getByRole('button', { name: 'Take my seat →', exact: true }).click();
+      await expect.poll(() => snapshot().game.players.find(p => p.seat === 0)?.name).toBe('Dan');
+      expect(snapshot().game.players).toHaveLength(3); expect(snapshot().game.totalChips).toBe(1950); verifyAccounting(snapshot());
+      await expect(alice.page.getByRole('heading', { name: 'Who are you?', exact: true })).toBeVisible();
+    } finally { await newcomerContext.close(); }
   } finally { await Promise.all(phones.map(phone => phone.context.close())); }
+});
+
+
+test('expanded corner QR has one address picker and preserves its selection when closed', async ({ page }) => {
+  const urls = ['http://192.168.1.2:3000', 'http://10.0.0.2:3000'];
+  const snapshot: Snapshot = {
+    game: { ...createGame(), phase: 'hand-complete' },
+    you: { id: 'board', host: true, dealer: true, legal: null },
+    joinUrl: urls[0], joinUrls: urls, canUndo: false, serverTime: Date.now(),
+  };
+  await page.routeWebSocket('**/ws', socket => {
+    socket.onMessage(raw => {
+      const message = JSON.parse(String(raw));
+      if (message.type === 'setJoinUrl') snapshot.joinUrl = message.url;
+      socket.send(JSON.stringify({ type: 'state', snapshot }));
+    });
+  });
+  await page.goto('/board');
+  const picker = page.getByRole('combobox', { name: 'Join address' });
+  await expect(picker).toHaveCount(1);
+  await page.getByRole('button', { name: 'Enlarge join QR code' }).click();
+  await expect(picker).toHaveCount(1);
+  await expect(page.locator('.join-corner select')).toHaveCount(0);
+  await picker.selectOption(urls[1]);
+  await expect(page.locator('.join-qr-overlay .join-url')).toHaveText(urls[1]);
+  await page.getByRole('button', { name: 'Close QR code' }).click();
+  await expect(picker).toHaveCount(1);
+  await expect(picker).toHaveValue(urls[1]);
+  await expect(page.locator('.join-corner .join-url')).toHaveText(urls[1]);
 });

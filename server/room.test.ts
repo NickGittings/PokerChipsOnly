@@ -7,6 +7,7 @@ import { Room } from './room';
 import { DEFAULT_CONFIG } from '../shared/blinds';
 import type { Action, ServerMsg } from '../shared/types';
 import { assertChips } from './engine/helpers';
+import { standings } from '../shared/standings';
 
 // Exercise the real room boundary while keeping transport deterministic. The
 // bootstrap only parses JSON and passes it to handle; no engine calls are mocked.
@@ -43,8 +44,228 @@ describe('authoritative multiplayer room', () => {
     expect(phones.map(p => p.state().you.host)).toEqual([false, false, false]);
     expect(phones.filter(p => p.state().you.legal)).toHaveLength(1);
     expect(new Set(phones.map(p => p.state().you.id)).size).toBe(3);
-    expect(JSON.stringify(board.state())).not.toContain(tokens[1]);
+    for (const token of tokens) expect(JSON.stringify(board.state())).not.toContain(token);
     expect(board.state().joinUrl).toBe('http://192.168.1.2:3000');
+    expect(board.state().joinUrls).toEqual(['http://192.168.1.2:3000']);
+  });
+
+  it('switches only to candidate URLs for dealers without changing game state or undo history', () => {
+    const urls = ['http://192.168.1.2:3000', 'http://10.0.0.2:3000'];
+    const room = new Room(urls, null), board = connect(room, 0, true), phone = connect(room, 1);
+    expect(phone.state().joinUrls).toEqual([urls[0]]);
+    const before = structuredClone(room.game), undo = structuredClone(room.undoStack);
+    room.handle(phone.ws, { type: 'setJoinUrl', url: urls[1] });
+    expect(phone.error()?.message).toMatch(/host.*board/i); expect(room.joinUrl).toBe(urls[0]);
+    room.handle(board.ws, { type: 'setJoinUrl', url: 'https://example.com' });
+    expect(board.error()?.message).toMatch(/available join URLs/i); expect(room.joinUrl).toBe(urls[0]);
+    room.handle(board.ws, { type: 'setJoinUrl', url: urls[1] });
+    expect(phone.state().joinUrl).toBe(urls[1]); expect(phone.state().joinUrls).toEqual([urls[1]]);
+    expect(board.state().joinUrls).toEqual(urls);
+    expect(room.game).toEqual(before); expect(room.undoStack).toEqual(undo);
+  });
+
+  it('restores the selected join URL only while it remains a current candidate', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'poker-room-')); directories.push(directory);
+    const file = join(directory, 'state.json'), urls = ['http://192.168.1.2:3000', 'http://10.0.0.2:3000'];
+    const room = new Room(urls, file), host = connect(room, 0);
+    room.handle(host.ws, { type: 'setJoinUrl', url: urls[1] });
+    const saved = JSON.parse(readFileSync(file, 'utf8'));
+    expect(saved).toMatchObject({ version: 2, joinUrl: urls[1] });
+    expect(new Room(urls, file).joinUrl).toBe(urls[1]);
+    expect(new Room(urls[0], file).joinUrl).toBe(urls[0]);
+    delete saved.joinUrl; writeFileSync(file, JSON.stringify(saved));
+    expect(new Room(urls, file).joinUrl).toBe(urls[0]);
+  });
+
+  it('reclaims a disconnected seat with its stack and turn, clearing stale identities', () => {
+    const { room, board, phones } = table(); start(room, board);
+    const old = phones[0], duplicate = connect(room, 1), player = structuredClone(room.game.players[0]);
+    room.disconnect(old.ws); room.disconnect(duplicate.ws);
+    const replacement = socket(); room.handle(replacement.ws, { type: 'join', token: 'replacement_device_00001' });
+    const revision = room.game.revision, undo = structuredClone(room.undoStack), actor = room.game.actorId;
+    room.handle(replacement.ws, { type: 'reclaimSeat', playerId: player.id });
+    expect(replacement.state().you.id).toBe(player.id);
+    expect(replacement.state().you.legal).not.toBeNull();
+    expect(room.game.players.find(p => p.id === player.id)).toEqual({ ...player, connected: true });
+    expect(room.game.actorId).toBe(actor); expect(room.game.revision).toBe(revision + 1);
+    expect(room.game.log.at(-1)?.text).toBe('Alice reconnected on a new device.');
+    expect(room.undoStack).toEqual(undo); assertChips(room.game);
+    const stale = connect(room, 1);
+    expect(room.game.players.some(p => p.id === stale.state().you.id)).toBe(false);
+    expect(room.identities.replacement_device_00001.name).toBe('Alice');
+    room.handle(replacement.ws, { type: 'action', action: { type: 'call' }, revision: room.game.revision });
+    expect(room.game.actorId).not.toBe(actor); assertChips(room.game);
+  });
+
+  it('rejects reclaim for unknown players and already seated callers without remapping identities', () => {
+    const { room, phones } = table(), fresh = socket();
+    room.handle(fresh.ws, { type: 'join', token: 'replacement_device_00001' });
+    const game = structuredClone(room.game), identities = structuredClone(room.identities);
+    room.handle(fresh.ws, { type: 'reclaimSeat', playerId: phones[0].state().you.id });
+    expect(fresh.error()?.message).toMatch(/seat is live/i);
+    expect(room.game).toEqual(game); expect(room.identities).toEqual(identities);
+    room.handle(fresh.ws, { type: 'reclaimSeat', playerId: 'missing-player' });
+    expect(fresh.error()?.message).toMatch(/not seated/i);
+    room.handle(phones[0].ws, { type: 'reclaimSeat', playerId: phones[1].state().you.id });
+    expect(phones[0].error()?.message).toMatch(/already hold a seat/i);
+    expect(room.game).toEqual(game); expect(room.identities).toEqual(identities);
+  });
+
+  it('reclaims a ghost seat in the lobby and preserves the remap across recovery', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'poker-room-')); directories.push(directory);
+    const file = join(directory, 'state.json'), { room, phones } = table(file), fresh = socket();
+    const id = phones[0].state().you.id;
+    room.disconnect(phones[0].ws); room.handle(fresh.ws, { type: 'join', token: 'replacement_device_00001' });
+    room.handle(fresh.ws, { type: 'reclaimSeat', playerId: id });
+    expect(room.game.players).toHaveLength(3); expect(room.game.totalChips).toBe(0);
+    const recovered = new Room(room.joinUrl, file), returning = socket();
+    room.handle(fresh.ws, { type: 'leaveSeat' }); // Current room changes cannot affect the recovered copy.
+    recovered.handle(returning.ws, { type: 'join', token: 'replacement_device_00001' });
+    expect(returning.state().you.id).toBe(id); expect(connect(recovered, 1).state().you.id).not.toBe(id);
+  });
+
+  it('routes lobby buy-ins through seat claiming with no chips until the tournament starts', () => {
+    const { room, board, phones } = table();
+    room.handle(phones[0].ws, { type: 'lateBuyIn', name: ' Alice ', seat: 7 });
+    expect(room.game.players).toHaveLength(3); expect(room.game.totalChips).toBe(0);
+    expect(room.game.players.find(p => p.name === 'Alice')).toMatchObject({ seat: 7, stack: 0 });
+    start(room, board); expect(room.game.totalChips).toBe(1500); assertChips(room.game);
+  });
+
+  it('allows a late buy-in between hands, validates it, and preserves accounting through next-hand undo', () => {
+    const { room, board, phones } = table(); start(room, board);
+    const fresh = socket(); room.handle(fresh.ws, { type: 'join', token: 'late_buyin_device_00001' });
+    const before = structuredClone(room.game);
+    room.handle(fresh.ws, { type: 'lateBuyIn', name: 'Dan', seat: 3 });
+    expect(fresh.error()?.message).toMatch(/between hands/i); expect(room.game).toEqual(before);
+    act(room, phones, { type: 'fold' }); act(room, phones, { type: 'fold' });
+    expect(room.game.phase).toBe('hand-complete');
+    const complete = structuredClone(room.game), undoCount = room.undoStack.length;
+    for (const [name, seat] of [['', 3], ['x'.repeat(25), 3], ['Dan', -1], ['Dan', 8], ['Dan', 1.5], ['Dan', 0]] as const) {
+      room.handle(fresh.ws, { type: 'lateBuyIn', name, seat }); expect(room.game).toEqual(complete);
+    }
+    room.handle(phones[0].ws, { type: 'lateBuyIn', name: 'Alice', seat: 3 });
+    expect(phones[0].error()?.message).toMatch(/already hold a seat/i); expect(room.game).toEqual(complete);
+    room.handle(fresh.ws, { type: 'lateBuyIn', name: ' Dan ', seat: 3 });
+    expect(room.game.players.find(p => p.id === fresh.state().you.id)).toMatchObject({ name: 'Dan', stack: 500, seat: 3 });
+    expect(room.game.totalChips).toBe(2000); expect(room.undoStack).toHaveLength(undoCount + 1); assertChips(room.game);
+    dealer(room, board, 'nextHand'); expect(room.game.phase).toBe('betting'); assertChips(room.game);
+    dealer(room, board, 'undo'); expect(room.game.phase).toBe('hand-complete');
+    expect(room.game.players).toHaveLength(4); expect(room.game.totalChips).toBe(2000); assertChips(room.game);
+    dealer(room, board, 'undo');
+    expect(room.game.players).toEqual(complete.players); expect(room.game.totalChips).toBe(1500); assertChips(room.game);
+    dealer(room, board, 'undo');
+    expect(room.game.phase).toBe('betting'); assertChips(room.game);
+  });
+
+
+  it('keeps a pot award undoable after a late buy-in', () => {
+    const { room, board, phones } = table(); start(room, board);
+    act(room, phones, { type: 'call' }); act(room, phones, { type: 'call' }); act(room, phones, { type: 'check' });
+    for (let i = 0; i < 3; i++) {
+      dealer(room, board, 'dealerConfirm');
+      for (let j = 0; j < 3; j++) act(room, phones, { type: 'check' });
+    }
+    const showdown = structuredClone(room.game);
+    room.handle(board.ws, { type: 'awardPot', potIndex: 0, winnerIds: [phones[0].state().you.id], revision: room.game.revision });
+    const fresh = socket(); room.handle(fresh.ws, { type: 'join', token: 'late_buyin_device_00001' });
+    room.handle(fresh.ws, { type: 'lateBuyIn', name: 'Dan', seat: 3 });
+    dealer(room, board, 'undo'); dealer(room, board, 'undo');
+    expect(room.game.phase).toBe('showdown'); expect(room.game.players).toEqual(showdown.players);
+    expect(room.game.pots).toEqual(showdown.pots); expect(room.game.totalChips).toBe(1500); assertChips(room.game);
+  });
+
+  it('restores a busted player with an undoable rebuy and rejects ineligible requests', () => {
+    const { room, board, phones } = table(); start(room, board);
+    room.handle(phones[0].ws, { type: 'rebuy' }); expect(phones[0].error()?.message).toMatch(/between hands/i);
+    act(room, phones, { type: 'fold' }); act(room, phones, { type: 'fold' });
+    room.handle(phones[0].ws, { type: 'rebuy' }); expect(phones[0].error()?.message).toMatch(/busted/i);
+    const player = room.game.players[0];
+    room.handle(board.ws, { type: 'hostAdjust', playerId: player.id, delta: -player.stack, revision: room.game.revision });
+    const before = structuredClone(room.game);
+    room.handle(phones[0].ws, { type: 'rebuy' });
+    expect(room.game.players[0]).toMatchObject({ stack: 500, handStartStack: 500, status: 'active' });
+    expect(room.game.players[0].bustOrder).toBeUndefined(); expect(room.game.totalChips).toBe(before.totalChips + 500); assertChips(room.game);
+    const after = structuredClone(room.game);
+    room.handle(phones[0].ws, { type: 'rebuy' }); expect(room.game).toEqual(after);
+    dealer(room, board, 'undo'); expect(room.game.players).toEqual(before.players); expect(room.game.totalChips).toBe(before.totalChips); assertChips(room.game);
+    const fresh = socket(); room.handle(fresh.ws, { type: 'join', token: 'late_buyin_device_00001' });
+    room.handle(fresh.ws, { type: 'rebuy' }); expect(fresh.error()?.message).toMatch(/seat/i);
+    room.handle(fresh.ws, { type: 'lateBuyIn', name: 'Dan', seat: player.seat });
+    expect(room.game.players).toHaveLength(3); expect(room.game.players.some(p => p.id === player.id)).toBe(false);
+    expect(room.game.players.find(p => p.name === 'Dan')).toMatchObject({ stack: 500, seat: player.seat });
+    expect(room.game.totalChips).toBe(before.totalChips + 500); assertChips(room.game);
+    expect(room.game.log.some(entry => /took Alice/.test(entry.text))).toBe(true);
+    // Taking over a busted seat archives the outgoing player instead of erasing them —
+    // they still surface in the final standings.
+    expect(room.game.eliminated).toEqual([before.players.find(p => p.id === player.id)]);
+    dealer(room, board, 'undo'); expect(room.game.players).toEqual(before.players); expect(room.game.eliminated).toEqual([]); assertChips(room.game);
+  });
+
+  it.each([false, true])('retires a displaced device identity (offline: %s), persists it, and restores it on undo', offline => {
+    const directory = mkdtempSync(join(tmpdir(), 'poker-room-')); directories.push(directory);
+    const file = join(directory, 'state.json'), { room, board, phones } = table(file); start(room, board);
+    act(room, phones, { type: 'fold' }); act(room, phones, { type: 'fold' });
+    const player = room.game.players[0], originalId = player.id;
+    room.handle(board.ws, { type: 'hostAdjust', playerId: originalId, delta: -player.stack, revision: room.game.revision });
+    if (offline) room.disconnect(phones[0].ws);
+    const fresh = socket(); room.handle(fresh.ws, { type: 'join', token: 'late_buyin_device_00001' });
+    room.handle(fresh.ws, { type: 'lateBuyIn', name: 'Dan', seat: player.seat });
+    const displaced = offline ? connect(room, 1) : phones[0];
+    const newId = displaced.state().you.id;
+    expect(newId).not.toBe(originalId);
+    expect(room.game.eliminated.map(p => p.id)).toEqual([originalId]);
+    expect(room.game.players.some(p => p.id === newId)).toBe(false);
+    const recovered = new Room(room.joinUrl, file);
+    expect(connect(recovered, 1).state().you.id).toBe(newId);
+    room.handle(displaced.ws, { type: 'lateBuyIn', name: 'Alice again', seat: 3 });
+    expect(displaced.error()).toBeUndefined();
+    expect(room.game.players.find(p => p.id === newId)?.seat).toBe(3);
+    const ids = [...room.game.players, ...room.game.eliminated].map(p => p.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    const rankedIds = standings(room.game).map(({ player }) => player.id);
+    expect(new Set(rankedIds).size).toBe(rankedIds.length);
+    dealer(room, board, 'undo'); // Undo the displaced player's new buy-in first.
+    expect(displaced.state().you.id).toBe(newId);
+    dealer(room, board, 'undo'); // Undo the takeover, including its identity rotation.
+    expect(displaced.state().you.id).toBe(originalId);
+    expect(room.game.players.find(p => p.id === originalId)?.connected).toBe(true);
+    expect(room.game.eliminated).toEqual([]); assertChips(room.game);
+  });
+
+  it('does not undo a later device reclaim when undoing a takeover', () => {
+    const { room, board, phones } = table(); start(room, board);
+    act(room, phones, { type: 'fold' }); act(room, phones, { type: 'fold' });
+    const player = room.game.players[0], originalId = player.id;
+    room.handle(board.ws, { type: 'hostAdjust', playerId: originalId, delta: -player.stack, revision: room.game.revision });
+    const fresh = socket(); room.handle(fresh.ws, { type: 'join', token: 'late_buyin_device_00001' });
+    room.handle(fresh.ws, { type: 'lateBuyIn', name: 'Dan', seat: player.seat });
+    const bobId = phones[1].state().you.id;
+    room.disconnect(phones[1].ws);
+    room.handle(phones[0].ws, { type: 'reclaimSeat', playerId: bobId });
+    expect(phones[0].state().you.id).toBe(bobId);
+    dealer(room, board, 'undo');
+    expect(phones[0].state().you.id).toBe(bobId);
+    expect(room.game.players.find(p => p.id === bobId)?.connected).toBe(true);
+    expect(room.game.players.find(p => p.id === originalId)?.connected).toBe(false);
+    expect(connect(room, 2).state().you.id).not.toBe(bobId);
+    assertChips(room.game);
+  });
+
+  it.each(['lateBuyIn', 'rebuy'] as const)('rejects an unmakeable %s after color-up without mutation', type => {
+    const { room, board, phones } = table(); start(room, board);
+    act(room, phones, { type: 'fold' }); act(room, phones, { type: 'fold' });
+    // A valid between-hand table with an original 500 buy-in and a new 30 chip unit.
+    room.game.config.denominations = [5, 30, 60].map(value => ({ value, color: '#ffffff' }));
+    room.game.players.forEach((p, i) => { p.stack = i === 0 ? 0 : 750; p.status = i === 0 ? 'busted' : 'active'; });
+    room.handle(board.ws, { type: 'colorUp', revision: room.game.revision });
+    expect(room.game.config.denominations.map(d => d.value)).toEqual([30, 60]); assertChips(room.game);
+    const fresh = socket(); room.handle(fresh.ws, { type: 'join', token: 'late_buyin_device_00001' });
+    const before = structuredClone(room.game), identities = structuredClone(room.identities), undo = structuredClone(room.undoStack);
+    const device = type === 'rebuy' ? phones[0] : fresh;
+    room.handle(device.ws, { type, name: 'Dan', seat: 0 });
+    expect(device.error()?.message).toMatch(/current chip denominations/i);
+    expect(room.game).toEqual(before); expect(room.identities).toEqual(identities); expect(room.undoStack).toEqual(undo);
   });
 
   it('resolves simultaneous seat claims and allows only one seat per identity', () => {
@@ -224,7 +445,7 @@ describe('authoritative multiplayer room', () => {
     const directory = mkdtempSync(join(tmpdir(), 'poker-room-')); directories.push(directory);
     const file = join(directory, 'state.json'), { room, board, phones } = table(file); start(room, board);
     act(room, phones, { type: 'raise', amount: 30 });
-    const saved = JSON.parse(readFileSync(file, 'utf8')); expect(saved.version).toBe(1);
+    const saved = JSON.parse(readFileSync(file, 'utf8')); expect(saved.version).toBe(2);
     const recovered = new Room('http://192.168.1.2:3000', file);
     expect(recovered.game.players.map(p => ({ ...p, connected: true }))).toEqual(room.game.players);
     expect(recovered.game.actorId).toBe(room.game.actorId); expect(recovered.game.revision).toBe(room.game.revision);
@@ -232,11 +453,20 @@ describe('authoritative multiplayer room', () => {
     expect(connect(recovered, 1).state().you.id).toBe(phones[0].state().you.id); assertChips(recovered.game);
   });
 
+  it('rejects version 1 saves instead of loading incomplete standings', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'poker-room-')); directories.push(directory);
+    const file = join(directory, 'state.json'), { room } = table(file);
+    const legacy = JSON.parse(readFileSync(file, 'utf8'));
+    delete legacy.game.eliminated; delete legacy.game.bustSequence; legacy.version = 1;
+    writeFileSync(file, JSON.stringify(legacy));
+    expect(() => new Room(room.joinUrl, file)).toThrow(/version/i);
+  });
+
   it('refuses an unsupported or invalid recovery snapshot', () => {
     const directory = mkdtempSync(join(tmpdir(), 'poker-room-')); directories.push(directory); const file = join(directory, 'state.json');
     writeFileSync(file, JSON.stringify({ version: 99 })); expect(() => new Room('http://localhost:3000', file)).toThrow(/version/i);
     const { room } = table(); room.game.totalChips = -1;
-    writeFileSync(file, JSON.stringify({ version: 1, game: room.game, identities: room.identities, hostToken: room.hostToken }));
+    writeFileSync(file, JSON.stringify({ version: 2, game: room.game, identities: room.identities, hostToken: room.hostToken }));
     expect(() => new Room('http://localhost:3000', file)).toThrow(/accounting/i);
   });
 });

@@ -3,6 +3,7 @@ import { createGame, createPlayer, startHand, startTournament } from '../state';
 import { adjustStack, colorUp, colorUpSuggested, finishHand, tickClock } from '../tournament';
 import { advanceStreet } from '../streets';
 import { assertChips } from '../helpers';
+import { placeOf, standings } from '../../../shared/standings';
 import { act, config, game, player, stacked } from './fixtures';
 
 describe('tournament lifecycle', () => {
@@ -79,8 +80,38 @@ describe('tournament lifecycle', () => {
     g.players[0].stack = 900; g.players.slice(1).forEach(p => { p.stack = 0; p.status = 'all-in'; });
     g.totalChips = 900;
     finishHand(g);
-    expect(g.players.map(p => p.place)).toEqual([1, 2, 3, 3]);
+    expect(g.players.map(p => placeOf(g, p))).toEqual([1, 2, 3, 3]);
     expect(g.phase).toBe('tournament-over'); expect(g.clockPaused).toBe(true);
+    assertChips(g);
+  });
+
+  it('surfaces an eliminated (seat-takeover) player in the standings at their true rank', () => {
+    const g = createGame(config());
+    const ghost = createPlayer('ghost', 'Ghost', 0, 0);
+    ghost.status = 'busted'; ghost.bustOrder = 1;
+    g.eliminated = [ghost];
+    g.players = [createPlayer('p1', 'Dan', 0, 500), createPlayer('p2', 'Bob', 1, 0)];
+    g.players[1].status = 'busted'; g.players[1].bustOrder = 2;
+    g.bustSequence = 2; g.phase = 'tournament-over'; g.totalChips = 500;
+    expect(standings(g).map(({ player, place }) => [player.id, place])).toEqual([['p1', 1], ['p2', 2], ['ghost', 3]]);
+    assertChips(g);
+  });
+
+  it('keeps places distinct and gapless when a late buy-in changes the field size between bust-outs', () => {
+    const g = createGame(config());
+    g.players = [createPlayer('p0', 'Alice', 0, 100), createPlayer('p1', 'Bob', 1, 100), createPlayer('p2', 'Cara', 2, 200)];
+    g.totalChips = 400;
+    g.players[0].stack = 0; g.players[0].handStartStack = 100; g.players[2].stack += 100; // Cara wins Alice's chips.
+    finishHand(g); // Alice busts 3rd of 3.
+    expect(placeOf(g, player(g, 'p0'))).toBe(3);
+    g.phase = 'hand-complete';
+    g.players.push(createPlayer('p3', 'Eve', 3, 100)); g.totalChips += 100; // Late buy-in into an empty seat.
+    g.players.forEach(p => { if (p.stack > 0) p.handStartStack = p.stack; });
+    g.players[1].stack = 0; g.players[3].stack += 100; // Bob busts next; Eve wins his chips. Cara is still alive too.
+    finishHand(g);
+    // Bob outlasted Alice, so he now takes the better (lower) place and Alice slides
+    // to last — places stay distinct and gapless instead of colliding on #3.
+    expect(g.players.map(p => placeOf(g, p))).toEqual([4, 3, undefined, undefined]);
     assertChips(g);
   });
 
@@ -98,7 +129,7 @@ describe('tournament lifecycle', () => {
     g = adjustStack(g, 'p0', 100);
     expect(g.phase).toBe('hand-complete');
     expect(player(g, 'p0').status).toBe('active');
-    expect(g.players.every(p => p.place === undefined)).toBe(true);
+    expect(g.players.every(p => p.bustOrder === undefined)).toBe(true);
     assertChips(g);
   });
 

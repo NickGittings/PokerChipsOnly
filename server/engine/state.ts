@@ -3,7 +3,7 @@ import { DEFAULT_CONFIG, blindLevel, validateConfig } from '../../shared/blinds'
 import { log, nextSeat, pay } from './helpers';
 import { settleRound } from './betting';
 export function createGame(config: Config = DEFAULT_CONFIG, now = 0): GameState {
-  return { config: structuredClone(config), players: [], phase: 'lobby', street: 'preflop', hand: 0, button: -1, smallBlindSeat: -1, bigBlindSeat: -1, actorId: null, currentBet: 0, lastFullRaiseSize: config.bigBlind, pots: [], log: [], logSequence: 0, level: 1, pendingLevel: 1, clockRemainingMs: config.levelMinutes * 60_000, clockUpdatedAt: now, clockPaused: true, totalChips: 0, revision: 0 };
+  return { config: structuredClone(config), players: [], eliminated: [], phase: 'lobby', street: 'preflop', hand: 0, button: -1, smallBlindSeat: -1, bigBlindSeat: -1, actorId: null, currentBet: 0, lastFullRaiseSize: config.bigBlind, pots: [], log: [], logSequence: 0, level: 1, pendingLevel: 1, clockRemainingMs: config.levelMinutes * 60_000, clockUpdatedAt: now, clockPaused: true, totalChips: 0, bustSequence: 0, revision: 0 };
 }
 export function createPlayer(id: string, name: string, seat: number, stack = 0): Player { return { id, name, seat, stack, committedThisStreet: 0, committedThisHand: 0, status: 'active', hasActedThisRound: false, actedAtBet: 0, connected: true, handStartStack: stack }; }
 export function startTournament(state: GameState, config: Config, now = 0) {
@@ -18,7 +18,7 @@ export function startHand(state: GameState) {
   const players = g.players.filter(p => p.stack > 0);
   if (players.length < 2) throw new Error('At least two players need chips.');
   g.level = g.pendingLevel; g.hand++; g.street = 'preflop'; g.phase = 'betting'; g.pendingStreet = undefined; g.pots = [];
-  for (const p of players) { p.status = 'active'; p.hasActedThisRound = false; p.actedAtBet = 0; p.committedThisHand = 0; p.committedThisStreet = 0; p.deadAnte = 0; p.handStartStack = p.stack; delete p.place; }
+  for (const p of players) { p.status = 'active'; p.hasActedThisRound = false; p.actedAtBet = 0; p.committedThisHand = 0; p.committedThisStreet = 0; p.deadAnte = 0; p.handStartStack = p.stack; delete p.bustOrder; }
   const button = nextSeat(players, g.button); g.button = button.seat;
   const sb = players.length === 2 ? button : nextSeat(players, button.seat), bb = nextSeat(players, sb.seat); g.smallBlindSeat = sb.seat; g.bigBlindSeat = bb.seat;
   const blinds = blindLevel(g.config, g.level); g.currentBet = blinds.big; g.lastFullRaiseSize = blinds.big;

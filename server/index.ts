@@ -5,16 +5,16 @@ import { resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Room } from './room';
+import { joinUrlCandidates } from './joinUrls';
 const port = Number(process.env.PORT ?? 3000);
 const clientPort = process.env.CLIENT_PORT ?? String(port);
-const addresses = Object.values(networkInterfaces()).flat().filter(n => n?.family === 'IPv4' && !n.internal).map(n => n!.address);
-const joinUrl = process.env.LAN_URL ?? `http://${addresses[0] ?? 'localhost'}:${clientPort}`;
-const room = new Room(joinUrl, process.env.STATE_FILE === ':memory:' ? null : process.env.STATE_FILE ?? '.state.json');
+const joinUrls = joinUrlCandidates(networkInterfaces(), clientPort, process.env.LAN_URL);
+const room = new Room(joinUrls, process.env.STATE_FILE === ':memory:' ? null : process.env.STATE_FILE ?? '.state.json');
 const app = express(), server = createServer(app);
-app.get('/api/health', (_req, res) => res.json({ ok: true, joinUrl, phase: room.game.phase }));
+app.get('/api/health', (_req, res) => res.json({ ok: true, joinUrl: room.joinUrl, phase: room.game.phase }));
 const dist = resolve('dist');
 if (existsSync(dist)) { app.use(express.static(dist)); app.get('*', (_req, res) => res.sendFile(resolve(dist, 'index.html'))); }
-else app.get('*', (_req, res) => res.send('Development client: open http://' + (addresses[0] ?? 'localhost') + ':5173'));
+else app.get('*', (_req, res) => res.send('Development client: open ' + room.joinUrl));
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 16 * 1024 });
 const alive = new WeakSet<WebSocket>();
 wss.on('connection', ws => {
@@ -26,6 +26,6 @@ wss.on('connection', ws => {
 const tick = setInterval(() => room.tick(Date.now()), 1000);
 const save = setInterval(() => room.safePersist(), 5000);
 const heartbeat = setInterval(() => { for (const ws of wss.clients) { if (!alive.has(ws)) ws.terminate(); else { alive.delete(ws); ws.ping(); } } }, 15000);
-server.listen(port, '0.0.0.0', () => { console.log(`\n  POKERCHIPS ONLY\n  Table: ${joinUrl}/board\n  Join:  ${joinUrl}\n  Local: http://localhost:${port}\n  ${addresses.length > 1 ? 'Other LAN addresses: ' + addresses.join(', ') : 'Keep this terminal open on game night.'}\n`); });
+server.listen(port, '0.0.0.0', () => { console.log(`\n  POKERCHIPS ONLY\n  Table: ${room.joinUrl}/board\n  Join:  ${room.joinUrl}\n  Local: http://localhost:${port}\n  Join candidates:\n${room.joinUrls.map(url => `    ${url}`).join('\n')}\n  Keep this terminal open on game night.\n`); });
 function shutdown() { clearInterval(tick); clearInterval(save); clearInterval(heartbeat); room.safePersist(); wss.clients.forEach(ws => ws.close()); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 1500).unref(); }
 process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);
