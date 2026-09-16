@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { WebSocket } from 'ws';
 import type { ClientMsg, GameState, ServerMsg } from '../shared/types';
-import { createGame, createPlayer, startHand, startTournament } from './engine/state';
+import { createGame, createPlayer, resetToLobby, startHand, startTournament } from './engine/state';
 import { applyAction, legalActions } from './engine/betting';
 import { advanceStreet } from './engine/streets';
 import { awardPots } from './engine/pots';
@@ -95,7 +95,7 @@ export class Room {
       const peer = this.peers.get(ws); if (!peer) throw new Error('Join the room first.');
       const id = this.identities[peer.token].id, dealer = peer.board || peer.token === this.hostToken;
       if (!['claimSeat', 'leaveSeat', 'reclaimSeat', 'lateBuyIn', 'rebuy', 'action'].includes(msg.type) && !dealer) throw new Error('Only the host or table board can do that.');
-      const needsRevision = ['action', 'dealerConfirm', 'nextHand', 'undo', 'pauseClock', 'awardPot', 'hostAdjust', 'adjustLevel', 'colorUp', 'moveSeat'].includes(msg.type);
+      const needsRevision = ['action', 'dealerConfirm', 'nextHand', 'undo', 'pauseClock', 'awardPot', 'hostAdjust', 'adjustLevel', 'colorUp', 'moveSeat', 'newGame'].includes(msg.type);
       if (needsRevision && (!('revision' in msg) || !Number.isInteger(msg.revision) || msg.revision !== this.game.revision)) throw new Error('The table changed. Review the latest state and try again.');
       if (msg.type === 'setJoinUrl') {
         if (!this.joinUrls.includes(msg.url)) throw new Error('Choose one of the available join URLs.');
@@ -147,11 +147,16 @@ export class Room {
       else if (msg.type === 'hostAdjust') next = adjustStack(this.game, msg.playerId, msg.delta);
       else if (msg.type === 'adjustLevel') next = adjustLevel(this.game, msg.delta);
       else if (msg.type === 'colorUp') next = colorUp(this.game);
+      else if (msg.type === 'newGame') next = resetToLobby(this.game, Date.now());
       else if (msg.type === 'pauseClock') { next = tickClock(this.game, Date.now()); next.clockPaused = !next.clockPaused; log(next, next.clockPaused ? 'Clock paused.' : 'Clock resumed.'); }
       else if (msg.type === 'undo') {
         const previous = this.undoStack.at(-1)?.game; if (!previous) throw new Error('Nothing to undo.');
-        next = structuredClone(previous); next.clockRemainingMs = this.game.clockRemainingMs; next.elapsedMs = this.game.elapsedMs; next.clockUpdatedAt = Date.now(); next.pendingLevel = this.game.pendingLevel; next.clockPaused = this.game.phase === 'tournament-over' && next.phase !== 'tournament-over' ? previous.clockPaused : this.game.clockPaused;
-        next.logSequence = this.game.logSequence; log(next, 'Host undid the last change.');
+        // Only newGame returns a live table to the lobby; restore its own clock rather than the reset one.
+        const backFromLobby = this.game.phase === 'lobby' && previous.phase !== 'lobby';
+        next = structuredClone(previous); next.clockUpdatedAt = Date.now();
+        if (backFromLobby) next.clockPaused = true;
+        else { next.clockRemainingMs = this.game.clockRemainingMs; next.elapsedMs = this.game.elapsedMs; next.pendingLevel = this.game.pendingLevel; next.clockPaused = this.game.phase === 'tournament-over' && next.phase !== 'tournament-over' ? previous.clockPaused : this.game.clockPaused; }
+        next.logSequence = this.game.logSequence; log(next, backFromLobby ? 'Host undid the new game. Clock paused — resume when the table is ready.' : 'Host undid the last change.');
       } else if (msg.type === 'moveSeat') {
         if (!['lobby', 'hand-complete'].includes(this.game.phase)) throw new Error('Seats can be moved only in the lobby or between hands.');
         if (!Number.isInteger(msg.seat) || msg.seat < 0 || msg.seat > 7) throw new Error('Choose a seat from 1–8.');
