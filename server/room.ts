@@ -95,7 +95,7 @@ export class Room {
       const peer = this.peers.get(ws); if (!peer) throw new Error('Join the room first.');
       const id = this.identities[peer.token].id, dealer = peer.board || peer.token === this.hostToken;
       if (!['claimSeat', 'leaveSeat', 'reclaimSeat', 'lateBuyIn', 'rebuy', 'action'].includes(msg.type) && !dealer) throw new Error('Only the host or table board can do that.');
-      const needsRevision = ['action', 'dealerConfirm', 'nextHand', 'undo', 'pauseClock', 'awardPot', 'hostAdjust', 'adjustLevel', 'colorUp'].includes(msg.type);
+      const needsRevision = ['action', 'dealerConfirm', 'nextHand', 'undo', 'pauseClock', 'awardPot', 'hostAdjust', 'adjustLevel', 'colorUp', 'moveSeat'].includes(msg.type);
       if (needsRevision && (!('revision' in msg) || !Number.isInteger(msg.revision) || msg.revision !== this.game.revision)) throw new Error('The table changed. Review the latest state and try again.');
       if (msg.type === 'setJoinUrl') {
         if (!this.joinUrls.includes(msg.url)) throw new Error('Choose one of the available join URLs.');
@@ -152,9 +152,20 @@ export class Room {
         const previous = this.undoStack.at(-1)?.game; if (!previous) throw new Error('Nothing to undo.');
         next = structuredClone(previous); next.clockRemainingMs = this.game.clockRemainingMs; next.elapsedMs = this.game.elapsedMs; next.clockUpdatedAt = Date.now(); next.pendingLevel = this.game.pendingLevel; next.clockPaused = this.game.phase === 'tournament-over' && next.phase !== 'tournament-over' ? previous.clockPaused : this.game.clockPaused;
         next.logSequence = this.game.logSequence; log(next, 'Host undid the last change.');
+      } else if (msg.type === 'moveSeat') {
+        if (!['lobby', 'hand-complete'].includes(this.game.phase)) throw new Error('Seats can be moved only in the lobby or between hands.');
+        if (!Number.isInteger(msg.seat) || msg.seat < 0 || msg.seat > 7) throw new Error('Choose a seat from 1–8.');
+        if (!this.game.players.some(p => p.id === msg.playerId)) throw new Error('That player is not seated at this table.');
+        next = structuredClone(this.game);
+        const mover = next.players.find(p => p.id === msg.playerId)!;
+        if (mover.seat === msg.seat) throw new Error('That player is already in that seat.');
+        const occupant = next.players.find(p => p.seat === msg.seat);
+        const fromSeat = mover.seat;
+        if (occupant) { occupant.seat = fromSeat; mover.seat = msg.seat; log(next, `Host swapped ${mover.name} and ${occupant.name}.`); }
+        else { mover.seat = msg.seat; log(next, `Host moved ${mover.name} to seat ${msg.seat + 1}.`); }
       } else throw new Error('Unknown message.');
       assertChips(next);
-      const seatChurn = ['claimSeat', 'leaveSeat', 'reclaimSeat'].includes(msg.type) || msg.type === 'lateBuyIn' && this.game.phase === 'lobby';
+      const seatChurn = ['claimSeat', 'leaveSeat', 'reclaimSeat', 'moveSeat'].includes(msg.type) || msg.type === 'lateBuyIn' && this.game.phase === 'lobby';
       if (msg.type === 'undo') {
         // Reverse only takeover rotations that have not since been reclaimed elsewhere.
         for (const { token, before, after } of this.undoStack.pop()!.retired) {
