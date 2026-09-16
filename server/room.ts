@@ -11,12 +11,14 @@ import { adjustStack, colorUp, tickClock } from './engine/tournament';
 import { assertChips, log } from './engine/helpers';
 interface Identity { id: string; name: string; board?: boolean }
 interface Peer { token: string; board: boolean }
+interface RetiredIdentity { token: string; before: string; after: string }
+interface UndoEntry { game: GameState; retired: RetiredIdentity[] }
 export class Room {
   game = createGame(undefined, Date.now());
   identities: Record<string, Identity> = {};
   hostToken = '';
   peers = new Map<WebSocket, Peer>();
-  undoStack: GameState[] = [];
+  undoStack: UndoEntry[] = [];
   joinUrls: string[];
   joinUrl: string;
   constructor(joinUrls: string | string[], public file: string | null = '.state.json') {
@@ -24,13 +26,22 @@ export class Room {
     this.joinUrl = this.joinUrls[0];
     if (file && existsSync(file)) {
       const saved = JSON.parse(readFileSync(file, 'utf8'));
-      if (saved.version !== 1 && saved.version !== 2) throw new Error('Unsupported save file version. Preserve the file before resetting.');
+      if (saved.version !== 2) throw new Error('Unsupported save file version. Preserve the file before resetting.');
       this.game = saved.game; this.identities = saved.identities; this.hostToken = saved.hostToken;
-      this.game.eliminated ??= []; this.game.bustSequence ??= 0;
       if (this.joinUrls.includes(saved.joinUrl)) this.joinUrl = saved.joinUrl;
       assertChips(this.game); this.game.players.forEach(p => p.connected = false);
       this.game.clockPaused = true; this.game.clockUpdatedAt = Date.now(); log(this.game, 'Game recovered. Clock paused — resume when the table is ready.');
     }
+  }
+  retireIdentity(playerId: string, keepToken?: string): RetiredIdentity[] {
+    const retired: RetiredIdentity[] = [];
+    for (const [token, identity] of Object.entries(this.identities)) {
+      if (token !== keepToken && identity.id === playerId) {
+        const after = randomUUID();
+        retired.push({ token, before: playerId, after }); identity.id = after;
+      }
+    }
+    return retired;
   }
   persist() {
     if (!this.file) return;
@@ -86,6 +97,7 @@ export class Room {
         this.joinUrl = msg.url; this.broadcast(); this.safePersist(); return;
       }
       let next: GameState;
+      let displacedId: string | undefined;
       if (msg.type === 'claimSeat' || msg.type === 'lateBuyIn' && this.game.phase === 'lobby') {
         if (this.game.phase !== 'lobby') throw new Error('Seats are locked once the tournament starts.');
         if (!Number.isInteger(msg.seat) || msg.seat < 0 || msg.seat > 7 || typeof msg.name !== 'string' || !msg.name.trim() || msg.name.trim().length > 24) throw new Error('Choose a seat and a name of 1–24 characters.');
@@ -96,9 +108,7 @@ export class Room {
         const player = this.game.players.find(p => p.id === msg.playerId);
         if (!player) throw new Error('That player is not seated at this table.');
         if (player.connected) throw new Error('That seat is live on another device. Close that tab first, or ask the host.');
-        for (const [token, identity] of Object.entries(this.identities)) {
-          if (token !== peer.token && identity.id === player.id) identity.id = randomUUID();
-        }
+        this.retireIdentity(player.id, peer.token);
         this.identities[peer.token].id = player.id; this.identities[peer.token].name = player.name;
         next = structuredClone(this.game); log(next, `${player.name} reconnected on a new device.`);
       } else if (msg.type === 'lateBuyIn') {
@@ -110,7 +120,7 @@ export class Room {
         const stack = this.buyInStack();
         const replaced = next.players.find(p => p.seat === msg.seat);
         next.players = next.players.filter(p => p.seat !== msg.seat);
-        if (replaced) { next.eliminated.push(replaced); log(next, `${msg.name.trim()} took ${replaced.name}’s busted seat ${msg.seat + 1}.`); }
+        if (replaced) { displacedId = replaced.id; next.eliminated.push(replaced); log(next, `${msg.name.trim()} took ${replaced.name}’s busted seat ${msg.seat + 1}.`); }
         next.players.push(createPlayer(id, msg.name.trim(), msg.seat, stack)); next.totalChips += stack;
         this.identities[peer.token].name = msg.name.trim(); log(next, `${msg.name.trim()} bought in for ${stack} chips.`);
       } else if (msg.type === 'rebuy') {
@@ -133,14 +143,21 @@ export class Room {
       else if (msg.type === 'colorUp') next = colorUp(this.game);
       else if (msg.type === 'pauseClock') { next = tickClock(this.game, Date.now()); next.clockPaused = !next.clockPaused; log(next, next.clockPaused ? 'Clock paused.' : 'Clock resumed.'); }
       else if (msg.type === 'undo') {
-        const previous = this.undoStack.at(-1); if (!previous) throw new Error('Nothing to undo.');
+        const previous = this.undoStack.at(-1)?.game; if (!previous) throw new Error('Nothing to undo.');
         next = structuredClone(previous); next.clockRemainingMs = this.game.clockRemainingMs; next.clockUpdatedAt = Date.now(); next.pendingLevel = Math.max(next.pendingLevel, this.game.pendingLevel); next.clockPaused = this.game.phase === 'tournament-over' && next.phase !== 'tournament-over' ? previous.clockPaused : this.game.clockPaused;
         next.logSequence = this.game.logSequence; log(next, 'Host undid the last change.');
       } else throw new Error('Unknown message.');
       assertChips(next);
       const seatChurn = ['claimSeat', 'leaveSeat', 'reclaimSeat'].includes(msg.type) || msg.type === 'lateBuyIn' && this.game.phase === 'lobby';
-      if (msg.type === 'undo') this.undoStack.pop();
-      else if (msg.type !== 'pauseClock' && !seatChurn) { this.undoStack.push(structuredClone(this.game)); this.undoStack = this.undoStack.slice(-100); }
+      if (msg.type === 'undo') {
+        // Reverse only takeover rotations that have not since been reclaimed elsewhere.
+        for (const { token, before, after } of this.undoStack.pop()!.retired) {
+          if (this.identities[token]?.id === after && !Object.values(this.identities).some(identity => identity.id === before)) this.identities[token].id = before;
+        }
+      } else if (msg.type !== 'pauseClock' && !seatChurn) {
+        const retired = displacedId ? this.retireIdentity(displacedId) : [];
+        this.undoStack.push({ game: structuredClone(this.game), retired }); this.undoStack = this.undoStack.slice(-100);
+      }
       next.revision = this.game.revision + 1; this.game = next; this.refreshConnections(); this.safePersist(); this.broadcast();
     } catch (error) { this.send(ws, { type: 'error', message: error instanceof Error ? error.message : 'The action was rejected.' }); }
   }

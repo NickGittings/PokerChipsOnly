@@ -7,6 +7,7 @@ import { Room } from './room';
 import { DEFAULT_CONFIG } from '../shared/blinds';
 import type { Action, ServerMsg } from '../shared/types';
 import { assertChips } from './engine/helpers';
+import { standings } from '../shared/standings';
 
 // Exercise the real room boundary while keeping transport deterministic. The
 // bootstrap only parses JSON and passes it to handle; no engine calls are mocked.
@@ -199,6 +200,56 @@ describe('authoritative multiplayer room', () => {
     // they still surface in the final standings.
     expect(room.game.eliminated).toEqual([before.players.find(p => p.id === player.id)]);
     dealer(room, board, 'undo'); expect(room.game.players).toEqual(before.players); expect(room.game.eliminated).toEqual([]); assertChips(room.game);
+  });
+
+  it.each([false, true])('retires a displaced device identity (offline: %s), persists it, and restores it on undo', offline => {
+    const directory = mkdtempSync(join(tmpdir(), 'poker-room-')); directories.push(directory);
+    const file = join(directory, 'state.json'), { room, board, phones } = table(file); start(room, board);
+    act(room, phones, { type: 'fold' }); act(room, phones, { type: 'fold' });
+    const player = room.game.players[0], originalId = player.id;
+    room.handle(board.ws, { type: 'hostAdjust', playerId: originalId, delta: -player.stack, revision: room.game.revision });
+    if (offline) room.disconnect(phones[0].ws);
+    const fresh = socket(); room.handle(fresh.ws, { type: 'join', token: 'late_buyin_device_00001' });
+    room.handle(fresh.ws, { type: 'lateBuyIn', name: 'Dan', seat: player.seat });
+    const displaced = offline ? connect(room, 1) : phones[0];
+    const newId = displaced.state().you.id;
+    expect(newId).not.toBe(originalId);
+    expect(room.game.eliminated.map(p => p.id)).toEqual([originalId]);
+    expect(room.game.players.some(p => p.id === newId)).toBe(false);
+    const recovered = new Room(room.joinUrl, file);
+    expect(connect(recovered, 1).state().you.id).toBe(newId);
+    room.handle(displaced.ws, { type: 'lateBuyIn', name: 'Alice again', seat: 3 });
+    expect(displaced.error()).toBeUndefined();
+    expect(room.game.players.find(p => p.id === newId)?.seat).toBe(3);
+    const ids = [...room.game.players, ...room.game.eliminated].map(p => p.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    const rankedIds = standings(room.game).map(({ player }) => player.id);
+    expect(new Set(rankedIds).size).toBe(rankedIds.length);
+    dealer(room, board, 'undo'); // Undo the displaced player's new buy-in first.
+    expect(displaced.state().you.id).toBe(newId);
+    dealer(room, board, 'undo'); // Undo the takeover, including its identity rotation.
+    expect(displaced.state().you.id).toBe(originalId);
+    expect(room.game.players.find(p => p.id === originalId)?.connected).toBe(true);
+    expect(room.game.eliminated).toEqual([]); assertChips(room.game);
+  });
+
+  it('does not undo a later device reclaim when undoing a takeover', () => {
+    const { room, board, phones } = table(); start(room, board);
+    act(room, phones, { type: 'fold' }); act(room, phones, { type: 'fold' });
+    const player = room.game.players[0], originalId = player.id;
+    room.handle(board.ws, { type: 'hostAdjust', playerId: originalId, delta: -player.stack, revision: room.game.revision });
+    const fresh = socket(); room.handle(fresh.ws, { type: 'join', token: 'late_buyin_device_00001' });
+    room.handle(fresh.ws, { type: 'lateBuyIn', name: 'Dan', seat: player.seat });
+    const bobId = phones[1].state().you.id;
+    room.disconnect(phones[1].ws);
+    room.handle(phones[0].ws, { type: 'reclaimSeat', playerId: bobId });
+    expect(phones[0].state().you.id).toBe(bobId);
+    dealer(room, board, 'undo');
+    expect(phones[0].state().you.id).toBe(bobId);
+    expect(room.game.players.find(p => p.id === bobId)?.connected).toBe(true);
+    expect(room.game.players.find(p => p.id === originalId)?.connected).toBe(false);
+    expect(connect(room, 2).state().you.id).not.toBe(bobId);
+    assertChips(room.game);
   });
 
   it.each(['lateBuyIn', 'rebuy'] as const)('rejects an unmakeable %s after color-up without mutation', type => {
@@ -402,22 +453,20 @@ describe('authoritative multiplayer room', () => {
     expect(connect(recovered, 1).state().you.id).toBe(phones[0].state().you.id); assertChips(recovered.game);
   });
 
-  it('backfills eliminated and bustSequence when loading a version 1 save from before they existed', () => {
+  it('rejects version 1 saves instead of loading incomplete standings', () => {
     const directory = mkdtempSync(join(tmpdir(), 'poker-room-')); directories.push(directory);
     const file = join(directory, 'state.json'), { room } = table(file);
     const legacy = JSON.parse(readFileSync(file, 'utf8'));
     delete legacy.game.eliminated; delete legacy.game.bustSequence; legacy.version = 1;
     writeFileSync(file, JSON.stringify(legacy));
-    const recovered = new Room(room.joinUrl, file);
-    expect(recovered.game.eliminated).toEqual([]); expect(recovered.game.bustSequence).toBe(0);
-    assertChips(recovered.game);
+    expect(() => new Room(room.joinUrl, file)).toThrow(/version/i);
   });
 
   it('refuses an unsupported or invalid recovery snapshot', () => {
     const directory = mkdtempSync(join(tmpdir(), 'poker-room-')); directories.push(directory); const file = join(directory, 'state.json');
     writeFileSync(file, JSON.stringify({ version: 99 })); expect(() => new Room('http://localhost:3000', file)).toThrow(/version/i);
     const { room } = table(); room.game.totalChips = -1;
-    writeFileSync(file, JSON.stringify({ version: 1, game: room.game, identities: room.identities, hostToken: room.hostToken }));
+    writeFileSync(file, JSON.stringify({ version: 2, game: room.game, identities: room.identities, hostToken: room.hostToken }));
     expect(() => new Room('http://localhost:3000', file)).toThrow(/accounting/i);
   });
 });

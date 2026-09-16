@@ -6,10 +6,11 @@ import { ChipStack } from './Chips';
 export function SeatBadge({ player, game }: { player?: Player; game: GameState }) {
   if (!player) return <div className="seat-empty">Open seat</div>;
   const acting = game.actorId === player.id;
+  const place = placeOf(game, player);
   return <div className={`seat-card ${acting ? 'seat-acting' : ''} ${!player.connected ? 'seat-offline' : ''} ${player.status === 'folded' || player.status === 'busted' ? 'seat-muted' : ''}`}>
     <div className="seat-top"><span className="seat-avatar">{player.name.slice(0, 1).toUpperCase()}</span><span className="seat-name">{player.name}</span><span className="seat-markers">{game.button === player.seat && <i title="Dealer button">D</i>}{game.smallBlindSeat === player.seat && <i title="Small blind">SB</i>}{game.bigBlindSeat === player.seat && <i title="Big blind">BB</i>}</span></div>
     <strong className="seat-stack">{money(player.stack)}</strong><div className="seat-chip-row"><ChipStack amount={player.stack} denominations={game.config.denominations} /></div>
-    <span className="seat-status">{!player.connected ? 'Reconnecting…' : acting ? 'Your action' : placeOf(game, player) ? `Finished #${placeOf(game, player)}` : player.status === 'active' ? 'In the hand' : player.status.replace('-', ' ')}</span>
+    <span className="seat-status">{!player.connected ? 'Reconnecting…' : acting ? 'Your action' : place ? `Finished #${place}` : player.status === 'active' ? 'In the hand' : player.status.replace('-', ' ')}</span>
     {player.committedThisStreet > 0 && <div className="seat-bet">In front <b>{money(player.committedThisStreet)}</b></div>}
   </div>;
 }

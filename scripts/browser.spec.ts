@@ -1,5 +1,6 @@
 import { expect, test, type Browser, type Page } from '@playwright/test';
 import type { Snapshot } from '../shared/types';
+import { createGame } from '../server/engine/state';
 
 // Observe the same full snapshots the UI receives; actions still use real UI.
 // Separate contexts are essential: each phone needs independent localStorage.
@@ -40,7 +41,7 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
   const phones = [alice, bob, cara];
   try {
     await board.goto('/setup');
-    await expect(board.locator('.join-large .qr-well svg')).toBeVisible();
+    await expect(board.locator('.join-large .qr-well canvas')).toBeVisible();
     await expect(board.locator('.join-large .join-url')).toHaveText('http://127.0.0.1:3301');
     // The elected phone host can visit setup without losing its live connection.
     await expect.poll(() => alice.snapshot()?.you.host).toBe(true);
@@ -60,7 +61,7 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
     await board.goto('/board');
     await expect.poll(() => snapshot()?.game.players.length).toBe(3);
     expect(balances(snapshot())).toEqual([500, 495, 490]); verifyAccounting(snapshot());
-    await expect(board.locator('.join-corner .qr-well svg')).toBeVisible();
+    await expect(board.locator('.join-corner .qr-well canvas')).toBeVisible();
     await expect(board.locator('.board-sidebar .join-panel')).toHaveCount(0);
     await board.getByRole('button', { name: 'Enlarge join QR code' }).click();
     await expect(board.getByRole('dialog', { name: 'Join the table', exact: true })).toBeVisible();
@@ -69,7 +70,7 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
     await board.setViewportSize({ width: 390, height: 844 });
     await expect(board.getByRole('button', { name: 'Enlarge join QR code' })).toBeVisible();
     await board.getByRole('button', { name: 'Enlarge join QR code' }).click();
-    await expect(board.locator('.join-qr-overlay .qr-well svg')).toBeVisible();
+    await expect(board.locator('.join-qr-overlay .qr-well canvas')).toBeVisible();
     await expect.poll(() => board.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await board.locator('.join-qr-overlay').click({ position: { x: 3, y: 3 } });
     await expect(board.getByRole('dialog')).toHaveCount(0);
@@ -204,4 +205,33 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
       await expect(alice.page.getByRole('heading', { name: 'Who are you?', exact: true })).toBeVisible();
     } finally { await newcomerContext.close(); }
   } finally { await Promise.all(phones.map(phone => phone.context.close())); }
+});
+
+
+test('expanded corner QR has one address picker and preserves its selection when closed', async ({ page }) => {
+  const urls = ['http://192.168.1.2:3000', 'http://10.0.0.2:3000'];
+  const snapshot: Snapshot = {
+    game: { ...createGame(), phase: 'hand-complete' },
+    you: { id: 'board', host: true, dealer: true, legal: null },
+    joinUrl: urls[0], joinUrls: urls, canUndo: false, serverTime: Date.now(),
+  };
+  await page.routeWebSocket('**/ws', socket => {
+    socket.onMessage(raw => {
+      const message = JSON.parse(String(raw));
+      if (message.type === 'setJoinUrl') snapshot.joinUrl = message.url;
+      socket.send(JSON.stringify({ type: 'state', snapshot }));
+    });
+  });
+  await page.goto('/board');
+  const picker = page.getByRole('combobox', { name: 'Join address' });
+  await expect(picker).toHaveCount(1);
+  await page.getByRole('button', { name: 'Enlarge join QR code' }).click();
+  await expect(picker).toHaveCount(1);
+  await expect(page.locator('.join-corner select')).toHaveCount(0);
+  await picker.selectOption(urls[1]);
+  await expect(page.locator('.join-qr-overlay .join-url')).toHaveText(urls[1]);
+  await page.getByRole('button', { name: 'Close QR code' }).click();
+  await expect(picker).toHaveCount(1);
+  await expect(picker).toHaveValue(urls[1]);
+  await expect(page.locator('.join-corner .join-url')).toHaveText(urls[1]);
 });
