@@ -34,6 +34,8 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
   await board.setViewportSize({ width: 1440, height: 1000 });
   const snapshot = watch(board); await board.goto('/board');
   await expect.poll(() => snapshot()?.you.dealer).toBe(true);
+  await expect(board.locator('.join-corner')).toHaveCount(0);
+  await expect(board.locator('.board-sidebar .join-panel')).toBeVisible();
   const alice = await phone(browser, 'Alice', 0), bob = await phone(browser, 'Bob', 1), cara = await phone(browser, 'Cara', 2);
   const phones = [alice, bob, cara];
   try {
@@ -85,7 +87,7 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
     expect(bob.snapshot().game.players.find(p => p.id === bobBefore.id)).toEqual(bobBefore);
     await expect(bob.page.locator('.your-stack')).toContainText('495');
 
-    // An old live tab needs confirmation and loses its seat immediately and on reload.
+    // A live duplicate protects the seat until its last connection closes.
     const aliceBefore = alice.snapshot().game.players.find(p => p.id === alice.snapshot().you.id)!;
     const oldToken = await alice.page.evaluate(() => localStorage.getItem('poker-device')!);
     const oldContext = await browser.newContext({ baseURL: 'http://127.0.0.1:3301' });
@@ -95,20 +97,15 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
       await oldPage.goto('/'); await expect.poll(() => oldSnapshot()?.you.id).toBe(aliceBefore.id);
       await alice.page.evaluate(() => localStorage.clear()); await alice.page.reload();
       await expect(alice.page.getByRole('heading', { name: 'Who are you?', exact: true })).toBeVisible();
-      await alice.page.getByRole('button', { name: 'Reclaim Alice, Seat 1', exact: true }).click();
-      await expect(alice.page.getByRole('dialog')).toContainText('This player is connected');
-      await alice.page.getByRole('button', { name: 'Cancel', exact: true }).click();
-      expect(alice.snapshot().you.id).not.toBe(aliceBefore.id);
-      await alice.page.getByRole('button', { name: 'Reclaim Alice, Seat 1', exact: true }).click();
-      await alice.page.getByRole('button', { name: 'Yes, this is my seat', exact: true }).click();
+      const reclaimAlice = alice.page.getByRole('button', { name: 'Reclaim Alice, Seat 1', exact: true });
+      await expect(reclaimAlice).toBeDisabled();
+      await oldContext.close();
+      await expect(reclaimAlice).toBeEnabled();
+      await reclaimAlice.click();
       await expect.poll(() => alice.snapshot()?.you.id).toBe(aliceBefore.id);
       expect(alice.snapshot().game.players.find(p => p.id === aliceBefore.id)).toEqual(aliceBefore);
       expect(alice.snapshot().you.legal).not.toBeNull();
       expect(await alice.page.evaluate(() => localStorage.getItem('poker-name'))).toBe('Alice');
-      await expect(oldPage.getByRole('heading', { name: 'Who are you?', exact: true })).toBeVisible();
-      await oldPage.reload();
-      await expect(oldPage.getByRole('heading', { name: 'Who are you?', exact: true })).toBeVisible();
-      expect(oldSnapshot().you.id).not.toBe(aliceBefore.id);
     } finally { await oldContext.close(); }
     await board.screenshot({ path: 'test-results/board.png', fullPage: true });
     await alice.page.screenshot({ path: 'test-results/player-mobile.png', fullPage: true });
@@ -182,5 +179,29 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
     await award('Cara');
     expect(balances(snapshot())).toEqual([50, 1410, 40]);
     expect(snapshot().game.phase).toBe('hand-complete'); verifyAccounting(snapshot());
+
+    // Between hands, a busted player can rebuy or a newcomer can take the chair.
+    await board.getByText('Adjust a stack', { exact: true }).click();
+    await board.getByLabel('Player', { exact: true }).selectOption(aliceId);
+    await board.getByLabel('Add or subtract chips').fill('-50');
+    await board.getByRole('button', { name: 'Apply', exact: true }).click();
+    const rebuy = alice.page.getByRole('button', { name: 'Buy back in for $500', exact: true });
+    await expect(rebuy).toBeVisible();
+    await rebuy.click();
+    await expect.poll(() => snapshot().game.players.find(p => p.id === aliceId)?.stack).toBe(500);
+    expect(snapshot().game.totalChips).toBe(1950); verifyAccounting(snapshot());
+    await board.getByRole('button', { name: /Undo last action/ }).click();
+    await expect(rebuy).toBeVisible();
+    const newcomerContext = await browser.newContext({ baseURL: 'http://127.0.0.1:3301' });
+    try {
+      const newcomer = await newcomerContext.newPage(); await newcomer.goto('/');
+      await newcomer.getByRole('button', { name: 'Join as a new player' }).click();
+      await newcomer.getByLabel('Your name').fill('Dan');
+      await newcomer.getByRole('button', { name: 'Seat 1', exact: true }).click();
+      await newcomer.getByRole('button', { name: 'Take my seat →', exact: true }).click();
+      await expect.poll(() => snapshot().game.players.find(p => p.seat === 0)?.name).toBe('Dan');
+      expect(snapshot().game.players).toHaveLength(3); expect(snapshot().game.totalChips).toBe(1950); verifyAccounting(snapshot());
+      await expect(alice.page.getByRole('heading', { name: 'Who are you?', exact: true })).toBeVisible();
+    } finally { await newcomerContext.close(); }
   } finally { await Promise.all(phones.map(phone => phone.context.close())); }
 });

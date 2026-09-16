@@ -11,7 +11,7 @@ const clientPort = process.env.CLIENT_PORT ?? String(port);
 const joinUrls = joinUrlCandidates(networkInterfaces(), clientPort, process.env.LAN_URL);
 const room = new Room(joinUrls, process.env.STATE_FILE === ':memory:' ? null : process.env.STATE_FILE ?? '.state.json');
 const app = express(), server = createServer(app);
-app.get('/api/health', (_req, res) => res.json({ ok: true, joinUrl: room.joinUrl, joinUrls: room.joinUrls, phase: room.game.phase }));
+app.get('/api/health', (_req, res) => res.json({ ok: true, joinUrl: room.joinUrl, phase: room.game.phase }));
 const dist = resolve('dist');
 if (existsSync(dist)) { app.use(express.static(dist)); app.get('*', (_req, res) => res.sendFile(resolve(dist, 'index.html'))); }
 else app.get('*', (_req, res) => res.send('Development client: open ' + room.joinUrl));

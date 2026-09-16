@@ -1,3 +1,4 @@
+import { isMakeable } from '../shared/chips';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { WebSocket } from 'ws';
@@ -41,7 +42,8 @@ export class Room {
     this.refreshConnections();
     for (const [ws, peer] of this.peers) {
       const identity = this.identities[peer.token];
-      this.send(ws, { type: 'state', snapshot: { game: this.game, you: { id: identity.id, host: peer.token === this.hostToken, dealer: peer.board || peer.token === this.hostToken, legal: legalActions(this.game, identity.id) }, joinUrl: this.joinUrl, joinUrls: this.joinUrls, canUndo: this.undoStack.length > 0, serverTime: Date.now() } });
+      const dealer = peer.board || peer.token === this.hostToken;
+      this.send(ws, { type: 'state', snapshot: { game: this.game, you: { id: identity.id, host: peer.token === this.hostToken, dealer, legal: legalActions(this.game, identity.id) }, joinUrl: this.joinUrl, joinUrls: dealer ? this.joinUrls : [this.joinUrl], canUndo: this.undoStack.length > 0, serverTime: Date.now() } });
     }
   }
   disconnect(ws: WebSocket) {
@@ -51,6 +53,12 @@ export class Room {
   }
   safePersist() { try { this.persist(); } catch (error) { console.error('Snapshot could not be saved:', error); for (const ws of this.peers.keys()) this.send(ws, { type: 'error', message: 'Snapshot could not be saved. Keep the server running and check disk access.' }); } }
   tick(now: number) { this.game = tickClock(this.game, now); this.broadcast(); }
+  buyInStack() {
+    const stack = this.game.config.startingStack;
+    if (!isMakeable(stack, this.game.config.denominations)) throw new Error('The starting buy-in cannot be made with the current chip denominations.');
+    if (stack <= 0 || this.game.totalChips + stack > 1_000_000) throw new Error('Buy-in must keep total chips at most 1,000,000.');
+    return stack;
+  }
   handle(ws: WebSocket, raw: unknown) {
     try {
       if (!raw || typeof raw !== 'object' || !('type' in raw)) throw new Error('Invalid message.');
@@ -69,7 +77,7 @@ export class Room {
       }
       const peer = this.peers.get(ws); if (!peer) throw new Error('Join the room first.');
       const id = this.identities[peer.token].id, dealer = peer.board || peer.token === this.hostToken;
-      if (!['claimSeat', 'leaveSeat', 'reclaimSeat', 'lateBuyIn', 'action'].includes(msg.type) && !dealer) throw new Error('Only the host or table board can do that.');
+      if (!['claimSeat', 'leaveSeat', 'reclaimSeat', 'lateBuyIn', 'rebuy', 'action'].includes(msg.type) && !dealer) throw new Error('Only the host or table board can do that.');
       const needsRevision = ['action', 'dealerConfirm', 'nextHand', 'undo', 'pauseClock', 'awardPot', 'hostAdjust', 'colorUp'].includes(msg.type);
       if (needsRevision && (!('revision' in msg) || !Number.isInteger(msg.revision) || msg.revision !== this.game.revision)) throw new Error('The table changed. Review the latest state and try again.');
       if (msg.type === 'setJoinUrl') {
@@ -86,6 +94,7 @@ export class Room {
         if (this.game.players.some(p => p.id === id)) throw new Error('You already hold a seat. Leave your seat before switching.');
         const player = this.game.players.find(p => p.id === msg.playerId);
         if (!player) throw new Error('That player is not seated at this table.');
+        if (player.connected) throw new Error('That seat is live on another device. Close that tab first, or ask the host.');
         for (const [token, identity] of Object.entries(this.identities)) {
           if (token !== peer.token && identity.id === player.id) identity.id = randomUUID();
         }
@@ -95,11 +104,23 @@ export class Room {
         if (this.game.phase !== 'hand-complete') throw new Error('New players can buy in only in the lobby or between hands.');
         if (this.game.players.some(p => p.id === id)) throw new Error('You already hold a seat.');
         if (!Number.isInteger(msg.seat) || msg.seat < 0 || msg.seat > 7 || typeof msg.name !== 'string' || !msg.name.trim() || msg.name.trim().length > 24) throw new Error('Choose a seat and a name of 1–24 characters.');
-        if (this.game.players.some(p => p.seat === msg.seat)) throw new Error('That seat was just taken. Choose another.');
+        if (this.game.players.some(p => p.seat === msg.seat && p.status !== 'busted')) throw new Error('That seat was just taken. Choose another.');
         next = structuredClone(this.game);
-        const stack = next.totalChips ? next.config.startingStack : 0;
+        const stack = this.buyInStack();
+        const replaced = next.players.find(p => p.seat === msg.seat);
+        next.players = next.players.filter(p => p.seat !== msg.seat);
+        if (replaced) log(next, `${msg.name.trim()} took ${replaced.name}’s busted seat ${msg.seat + 1}.`);
         next.players.push(createPlayer(id, msg.name.trim(), msg.seat, stack)); next.totalChips += stack;
         this.identities[peer.token].name = msg.name.trim(); log(next, `${msg.name.trim()} bought in for ${stack} chips.`);
+      } else if (msg.type === 'rebuy') {
+        if (this.game.phase !== 'hand-complete') throw new Error('Buy back in only between hands.');
+        const player = this.game.players.find(p => p.id === id);
+        if (!player) throw new Error('Take a seat before buying back in.');
+        if (player.status !== 'busted') throw new Error('Only busted players can buy back in.');
+        const stack = this.buyInStack();
+        next = adjustStack(this.game, id, stack);
+        next.players.find(p => p.id === id)!.handStartStack = stack;
+        next.log.at(-1)!.text = `${player.name} bought back in for ${stack} chips.`;
       } else if (msg.type === 'leaveSeat') {
         if (this.game.phase !== 'lobby') throw new Error('Seats stay reserved during a tournament.');
         next = structuredClone(this.game); next.players = next.players.filter(p => p.id !== id);
@@ -117,10 +138,9 @@ export class Room {
         next.logSequence = this.game.logSequence; log(next, 'Host undid the last change.');
       } else throw new Error('Unknown message.');
       assertChips(next);
-      // Older snapshots would erase the new seat and its buy-in.
-      if (msg.type === 'lateBuyIn' && this.game.phase === 'hand-complete') this.undoStack = [];
+      const seatChurn = ['claimSeat', 'leaveSeat', 'reclaimSeat'].includes(msg.type) || msg.type === 'lateBuyIn' && this.game.phase === 'lobby';
       if (msg.type === 'undo') this.undoStack.pop();
-      else if (msg.type !== 'pauseClock' && msg.type !== 'claimSeat' && msg.type !== 'leaveSeat' && msg.type !== 'reclaimSeat' && msg.type !== 'lateBuyIn') { this.undoStack.push(structuredClone(this.game)); this.undoStack = this.undoStack.slice(-100); }
+      else if (msg.type !== 'pauseClock' && !seatChurn) { this.undoStack.push(structuredClone(this.game)); this.undoStack = this.undoStack.slice(-100); }
       next.revision = this.game.revision + 1; this.game = next; this.refreshConnections(); this.safePersist(); this.broadcast();
     } catch (error) { this.send(ws, { type: 'error', message: error instanceof Error ? error.message : 'The action was rejected.' }); }
   }
