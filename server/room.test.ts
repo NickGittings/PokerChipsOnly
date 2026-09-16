@@ -326,7 +326,7 @@ describe('authoritative multiplayer room', () => {
       room.handle(actor.ws, { type: 'action', action: { type: 'call' }, ...extras });
       expect(actor.error()?.message).toMatch(/table changed|revision/i); expect(room.game).toEqual(before);
     }
-    for (const type of ['dealerConfirm', 'nextHand', 'undo', 'pauseClock', 'awardPot', 'hostAdjust', 'colorUp']) {
+    for (const type of ['dealerConfirm', 'nextHand', 'undo', 'pauseClock', 'awardPot', 'hostAdjust', 'adjustLevel', 'colorUp']) {
       room.handle(board.ws, { type }); expect(board.error()?.message).toMatch(/table changed|revision/i); expect(room.game).toEqual(before);
     }
   });
@@ -349,6 +349,50 @@ describe('authoritative multiplayer room', () => {
     dealer(room, board, 'undo');
     expect(room.game.players).toEqual(before.players); expect(room.game.actorId).toBe(before.actorId);
     expect(room.game.revision).toBe(before.revision + 2); expect(room.game.log.at(-1)?.text).toMatch(/undid/i); assertChips(room.game);
+  });
+
+  it('restricts manual blinds to dealers and keeps them out of undo history', () => {
+    const { room, board, phones } = table(); start(room, board);
+    const before = structuredClone(room.game), undoCount = room.undoStack.length;
+    room.handle(phones[0].ws, { type: 'adjustLevel', delta: 1, revision: room.game.revision });
+    expect(phones[0].error()?.message).toMatch(/host.*board/i); expect(room.game).toEqual(before);
+    room.handle(board.ws, { type: 'adjustLevel', delta: 1, revision: room.game.revision });
+    expect(room.game.pendingLevel).toBe(2); expect(room.game.level).toBe(1);
+    expect(room.game.revision).toBe(before.revision + 1); expect(room.undoStack).toHaveLength(undoCount);
+    room.handle(board.ws, { type: 'adjustLevel', delta: 1, revision: before.revision });
+    expect(board.error()?.message).toMatch(/table changed/i); expect(room.game.pendingLevel).toBe(2);
+  });
+
+  it('preserves a manually decreased blind level and elapsed play time through undo', () => {
+    const { room, board, phones } = table(); start(room, board);
+    room.handle(board.ws, { type: 'adjustLevel', delta: 1, revision: room.game.revision });
+    act(room, phones, { type: 'fold' });
+    room.tick(room.game.clockUpdatedAt + 20_000);
+    room.handle(board.ws, { type: 'adjustLevel', delta: -1, revision: room.game.revision });
+    const remaining = room.game.clockRemainingMs, elapsed = room.game.elapsedMs;
+    dealer(room, board, 'undo');
+    expect(room.game).toMatchObject({ pendingLevel: 1, elapsedMs: elapsed, clockRemainingMs: remaining });
+    expect(elapsed).toBe(20_000); expect(room.game.players.every(p => p.status !== 'folded')).toBe(true); assertChips(room.game);
+  });
+
+  it('undoes a time-up final award, then finishes again with tied chip leaders', () => {
+    const { room, board, phones } = table();
+    room.handle(board.ws, { type: 'startTournament', config: { ...DEFAULT_CONFIG, durationMinutes: 5 } });
+    act(room, phones, { type: 'all-in' }); act(room, phones, { type: 'call' }); act(room, phones, { type: 'call' });
+    for (let i = 0; i < 3; i++) dealer(room, board, 'dealerConfirm');
+    room.tick(room.game.clockUpdatedAt + 300_000);
+    expect(room.game.phase).toBe('showdown'); expect(room.game.clockPaused).toBe(false);
+    const before = structuredClone(room.game), winnerIds = phones.slice(0, 2).map(phone => phone.state().you.id);
+    const award = () => room.handle(board.ws, { type: 'awardPot', potIndex: 0, winnerIds, revision: room.game.revision });
+    award();
+    expect(room.game.phase).toBe('tournament-over'); expect(room.game.clockPaused).toBe(true);
+    expect(standings(room.game).map(({ place }) => place)).toEqual([1, 1, 3]);
+    dealer(room, board, 'undo');
+    expect(room.game).toMatchObject({ phase: 'showdown', clockPaused: false, elapsedMs: 300_000 });
+    expect(room.game.players).toEqual(before.players); expect(room.game.pots).toEqual(before.pots);
+    award();
+    expect(room.game.phase).toBe('tournament-over'); expect(room.game.clockPaused).toBe(true);
+    expect(standings(room.game).map(({ place }) => place)).toEqual([1, 1, 3]); assertChips(room.game);
   });
 
   it('rejects lobby stack adjustments without changing state or trapping seat changes', () => {
@@ -460,6 +504,31 @@ describe('authoritative multiplayer room', () => {
     delete legacy.game.eliminated; delete legacy.game.bustSequence; legacy.version = 1;
     writeFileSync(file, JSON.stringify(legacy));
     expect(() => new Room(room.joinUrl, file)).toThrow(/version/i);
+  });
+
+  it('persists the duration and elapsed play time, then freezes them on recovery', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'poker-room-')); directories.push(directory);
+    const file = join(directory, 'state.json'), { room, board, phones } = table(file);
+    room.handle(board.ws, { type: 'startTournament', config: { ...DEFAULT_CONFIG, durationMinutes: 30 } });
+    room.tick(room.game.clockUpdatedAt + 20_000);
+    act(room, phones, { type: 'fold' });
+    const recovered = new Room(room.joinUrl, file);
+    expect(recovered.game.elapsedMs).toBe(20_000); expect(recovered.game.config.durationMinutes).toBe(30);
+    expect(recovered.game.clockPaused).toBe(true);
+    recovered.tick(recovered.game.clockUpdatedAt + 60_000);
+    expect(recovered.game.elapsedMs).toBe(20_000); assertChips(recovered.game);
+  });
+
+  it('defaults time-limit fields in older version 2 saves', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'poker-room-')); directories.push(directory);
+    const file = join(directory, 'state.json'), { room, board } = table(file); start(room, board);
+    const legacy = JSON.parse(readFileSync(file, 'utf8'));
+    delete legacy.game.elapsedMs; delete legacy.game.config.durationMinutes;
+    writeFileSync(file, JSON.stringify(legacy));
+    const recovered = new Room(room.joinUrl, file);
+    expect(recovered.game.elapsedMs).toBe(0); expect(recovered.game.config.durationMinutes).toBe(0);
+    recovered.game.clockPaused = false; recovered.tick(recovered.game.clockUpdatedAt + 1000);
+    expect(recovered.game.elapsedMs).toBe(1000); expect(Number.isFinite(recovered.game.clockRemainingMs)).toBe(true); assertChips(recovered.game);
   });
 
   it('refuses an unsupported or invalid recovery snapshot', () => {

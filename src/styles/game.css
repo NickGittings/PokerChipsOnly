@@ -26,6 +26,14 @@
 .player-hand .blind-timer{gap:10px}
 .player-hand .blind-timer strong{font-size:18px;margin-top:5px}
 .player-hand .blind-timer .label{font-size:8px}
+.blind-controls{display:flex;gap:7px;width:100%}
+.blind-controls .game-button{flex:1;min-width:0;min-height:48px;padding:12px 8px;font-size:12px}
+.blind-timer .game-countdown{min-width:95px}
+.player-hand .blind-timer.has-time-limit{flex:1;min-width:0;justify-content:flex-end;gap:10px 14px}
+.player-hand .blind-timer .game-countdown{min-width:0}
+.player-hand .blind-timer .notice{flex-basis:100%;text-align:right;line-height:1.5}
+.time-limit-hint{margin:0 0 20px}
+.time-limit-preview td:first-child{color:var(--gold);font-size:11px}
 .player-hand .player-seat-strip{padding-bottom:4px}
 button.call-action:hover:not(:disabled){background:#e4c487}
 button.fold-action:hover:not(:disabled){background:#b94b3e}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createGame, createPlayer, startHand, startTournament } from '../state';
-import { adjustStack, colorUp, colorUpSuggested, finishHand, tickClock } from '../tournament';
+import { adjustLevel, adjustStack, colorUp, colorUpSuggested, finishHand, tickClock } from '../tournament';
 import { advanceStreet } from '../streets';
 import { assertChips } from '../helpers';
 import { placeOf, standings } from '../../../shared/standings';
@@ -83,6 +83,82 @@ describe('tournament lifecycle', () => {
     expect(g.players.map(p => placeOf(g, p))).toEqual([1, 2, 3, 3]);
     expect(g.phase).toBe('tournament-over'); expect(g.clockPaused).toBe(true);
     assertChips(g);
+  });
+
+  it('counts play time independently of levels, excluding pauses, lobby, and finished games', () => {
+    let g = tickClock(game(3, { levelMinutes: 1 }), 65_000);
+    expect(g.elapsedMs).toBe(65_000);
+    g.clockPaused = true; g = tickClock(g, 100_000); expect(g.elapsedMs).toBe(65_000);
+    g.clockPaused = false; g = tickClock(g, 110_000); expect(g.elapsedMs).toBe(75_000);
+    g = tickClock(g, 109_000); expect(g.elapsedMs).toBe(75_000);
+    for (const phase of ['lobby', 'tournament-over'] as const) {
+      g.phase = phase; g = tickClock(g, g.clockUpdatedAt + 1000); expect(g.elapsedMs).toBe(75_000);
+    }
+  });
+
+  it('finishes the current hand after the limit and ranks survivors by chips', () => {
+    let g = tickClock(game(3, { durationMinutes: 5 }), 300_000);
+    expect(g.phase).toBe('betting'); expect(g.clockPaused).toBe(false);
+    g = act(g, 'fold'); expect(g.phase).toBe('betting'); g = act(g, 'fold');
+    expect(g.phase).toBe('tournament-over'); expect(g.clockPaused).toBe(true);
+    expect(standings(g).map(({ player, place }) => [player.id, place])).toEqual([['p2', 1], ['p0', 2], ['p1', 3]]);
+    expect(g.log.at(-1)?.text).toBe("Time's up — Player 2 wins on chips."); assertChips(g);
+  });
+
+  it('ends the tournament once time expires while resting at hand-complete, without dealing another hand', () => {
+    let g = tickClock(game(3, { durationMinutes: 5 }), 250_000);
+    expect(g.phase).toBe('betting'); expect(g.elapsedMs).toBe(250_000);
+    g = act(g, 'fold'); g = act(g, 'fold');
+    expect(g.phase).toBe('hand-complete'); expect(g.clockPaused).toBe(false);
+    g = tickClock(g, 299_000);
+    expect(g.phase).toBe('hand-complete');
+    g = tickClock(g, 300_000);
+    expect(g.phase).toBe('tournament-over'); expect(g.clockPaused).toBe(true);
+    expect(g.log.at(-1)?.text).toMatch(/Time's up/);
+    expect(() => startHand(g)).toThrow(/Finish this hand/);
+    const logLength = g.log.length;
+    g = tickClock(g, 400_000);
+    expect(g.phase).toBe('tournament-over'); expect(g.log.length).toBe(logLength);
+    assertChips(g);
+  });
+
+  it('ties equal survivor stacks while preserving simultaneous and archived bust-out rankings', () => {
+    const g = createGame(config({ durationMinutes: 5 }));
+    g.players = [200, 300, 300, 100, 50].map((n, i) => createPlayer(`p${i}`, `Player ${i}`, i, n));
+    g.players[3].stack = 0; g.players[4].stack = 0;
+    const eliminated = createPlayer('old', 'Former player', 7); eliminated.status = 'busted'; eliminated.bustOrder = 1;
+    g.eliminated = [eliminated]; g.bustSequence = 1; g.totalChips = 800; g.elapsedMs = 300_000;
+    finishHand(g);
+    expect(standings(g).map(({ player, place }) => [player.id, place])).toEqual([['p1', 1], ['p2', 1], ['p0', 3], ['p3', 4], ['p4', 5], ['old', 6]]);
+    expect(g.log.at(-1)?.text).toMatch(/Player 1 and Player 2 tie on chips/); assertChips(g);
+  });
+
+  it('recalculates time-up standings after stack corrections without reviving play', () => {
+    let g = tickClock(game(3, { durationMinutes: 5 }), 300_000);
+    g = act(g, 'fold'); g = act(g, 'fold'); g = adjustStack(g, 'p1', 100);
+    expect(g.phase).toBe('tournament-over'); expect(g.clockPaused).toBe(true);
+    expect(standings(g).map(({ player, place }) => [player.id, place])).toEqual([['p1', 1], ['p2', 2], ['p0', 3]]); assertChips(g);
+  });
+
+  it('queues manual blind changes for the next hand without changing elapsed play time', () => {
+    let g = tickClock(game(3, { levelMinutes: 1 }), 20_000);
+    g = adjustLevel(g, 1);
+    expect(g).toMatchObject({ level: 1, pendingLevel: 2, clockRemainingMs: 60_000, elapsedMs: 20_000, currentBet: 10 });
+    g = act(g, 'fold'); g = act(g, 'fold'); g = startHand(g);
+    expect(g).toMatchObject({ level: 2, pendingLevel: 2, currentBet: 20 });
+    g = adjustLevel(g, -1);
+    expect(g).toMatchObject({ level: 2, pendingLevel: 1, clockRemainingMs: 60_000, elapsedMs: 20_000 });
+    g = act(g, 'fold'); g = act(g, 'fold'); g = startHand(g);
+    expect(g).toMatchObject({ level: 1, currentBet: 10 }); assertChips(g);
+  });
+
+  it('rejects invalid blind adjustments and levels below one without mutating state', () => {
+    const g = game(), before = structuredClone(g);
+    for (const delta of [-1, 0, 2, -2, 0.5, NaN]) expect(() => adjustLevel(g, delta)).toThrow();
+    expect(g).toEqual(before);
+    for (const phase of ['lobby', 'tournament-over'] as const) {
+      g.phase = phase; expect(() => adjustLevel(g, 1)).toThrow(/live tournament/);
+    }
   });
 
   it('surfaces an eliminated (seat-takeover) player in the standings at their true rank', () => {
