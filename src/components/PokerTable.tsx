@@ -18,9 +18,15 @@ export function SeatBadge({ player, game }: { player?: Player; game: GameState }
 }
 
 export function TableRoster({ game }: { game: GameState }) {
+  const rosterRef = useRef<HTMLDivElement>(null);
   const actorRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { actorRef.current?.scrollIntoView({ inline: 'center', block: 'nearest' }); }, [game.actorId]);
-  return <div className="player-roster" aria-label="Players at the table">{[...game.players].sort((a, b) => a.seat - b.seat).map(p => {
+  useEffect(() => {
+    const roster = rosterRef.current, actor = actorRef.current;
+    if (!roster || !actor) return;
+    const rosterRect = roster.getBoundingClientRect(), actorRect = actor.getBoundingClientRect();
+    roster.scrollLeft += actorRect.left + actorRect.width / 2 - (rosterRect.left + roster.clientLeft + roster.clientWidth / 2);
+  }, [game.actorId]);
+  return <div ref={rosterRef} className="player-roster" aria-label="Players at the table">{[...game.players].sort((a, b) => a.seat - b.seat).map(p => {
     const acting = game.actorId === p.id;
     return <div ref={acting ? actorRef : undefined} key={p.id} className={`roster-seat ${acting ? 'acting' : ''} ${p.status === 'folded' || p.status === 'busted' ? 'muted' : ''} ${!p.connected ? 'offline' : ''}`}>
       <span className="roster-avatar">{p.name.slice(0, 1).toUpperCase()}</span>

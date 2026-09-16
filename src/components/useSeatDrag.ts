@@ -6,6 +6,11 @@ interface Drag { playerId: string; fromSeat: number; pointerId: number; startX: 
 /** Lets the host drag a seated player onto another seat to move or swap them. Mouse, touch, and a keyboard pick-up/drop fallback all funnel into the same `onMoveSeat`. Omit it to render seats inert. */
 export function useSeatDrag(players: Player[], onMoveSeat?: (playerId: string, seat: number) => void) {
   const [drag, setDrag] = useState<Drag | null>(null);
+  const dragRef = useRef<Drag | null>(null);
+  const updateDrag = useCallback((next: Drag | null) => {
+    dragRef.current = next;
+    setDrag(next);
+  }, []);
   const [hoverSeat, setHoverSeat] = useState<number | null>(null);
   const [pickedSeat, setPickedSeat] = useState<number | null>(null);
   const [announcement, setAnnouncement] = useState('');
@@ -16,45 +21,54 @@ export function useSeatDrag(players: Player[], onMoveSeat?: (playerId: string, s
     return null;
   }, []);
 
+  const refreshRects = useCallback(() => {
+    rects.current = new Map(Array.from(document.querySelectorAll<HTMLElement>('[data-seat]')).map(el => [Number(el.dataset.seat), el.getBoundingClientRect()]));
+  }, []);
+
   useEffect(() => {
     if (!drag?.dragging) return;
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { setDrag(null); setHoverSeat(null); setAnnouncement('Move canceled.'); } };
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { updateDrag(null); setHoverSeat(null); setAnnouncement('Move canceled.'); } };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [drag?.dragging]);
+    window.addEventListener('resize', refreshRects);
+    window.addEventListener('orientationchange', refreshRects);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', refreshRects);
+      window.removeEventListener('orientationchange', refreshRects);
+    };
+  }, [drag?.dragging, updateDrag, refreshRects]);
 
   const onPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>, seat: number, player?: Player) => {
     if (!onMoveSeat || !player || event.button !== 0) return;
     event.currentTarget.setPointerCapture(event.pointerId);
-    rects.current = new Map(Array.from(document.querySelectorAll<HTMLElement>('[data-seat]')).map(el => [Number(el.dataset.seat), el.getBoundingClientRect()]));
+    refreshRects();
     setPickedSeat(null); setAnnouncement('');
-    setDrag({ playerId: player.id, fromSeat: seat, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, dx: 0, dy: 0, dragging: false });
-  }, [onMoveSeat]);
+    updateDrag({ playerId: player.id, fromSeat: seat, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, dx: 0, dy: 0, dragging: false });
+  }, [onMoveSeat, updateDrag, refreshRects]);
 
   const onPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    setDrag(current => {
-      if (!current || event.pointerId !== current.pointerId) return current;
-      const dx = event.clientX - current.startX, dy = event.clientY - current.startY;
-      const dragging = current.dragging || Math.hypot(dx, dy) > 6;
-      if (dragging) setHoverSeat(seatAt(event.clientX, event.clientY));
-      return { ...current, dx, dy, dragging };
-    });
-  }, [seatAt]);
+    const current = dragRef.current;
+    if (!current || event.pointerId !== current.pointerId) return;
+    const dx = event.clientX - current.startX, dy = event.clientY - current.startY;
+    const dragging = current.dragging || Math.hypot(dx, dy) > 6;
+    if (dragging) setHoverSeat(seatAt(event.clientX, event.clientY));
+    updateDrag({ ...current, dx, dy, dragging });
+  }, [seatAt, updateDrag]);
 
   const onPointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    setDrag(current => {
-      if (!current || event.pointerId !== current.pointerId) return current;
-      const target = seatAt(event.clientX, event.clientY);
-      if (current.dragging && target !== null && target !== current.fromSeat) onMoveSeat?.(current.playerId, target);
-      return null;
-    });
+    const current = dragRef.current;
+    if (!current || event.pointerId !== current.pointerId) return;
+    const target = seatAt(event.clientX, event.clientY);
+    updateDrag(null);
     setHoverSeat(null);
-  }, [seatAt, onMoveSeat]);
+    if (current.dragging && target !== null && target !== current.fromSeat) onMoveSeat?.(current.playerId, target);
+  }, [seatAt, onMoveSeat, updateDrag]);
 
   const onPointerCancel = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    setDrag(current => current && event.pointerId === current.pointerId ? null : current);
+    if (event.pointerId !== dragRef.current?.pointerId) return;
+    updateDrag(null);
     setHoverSeat(null);
-  }, []);
+  }, [updateDrag]);
 
   const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>, seat: number, player?: Player) => {
     if (!onMoveSeat) return;

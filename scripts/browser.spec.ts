@@ -347,6 +347,40 @@ test('player screen pins a roster with turn, dealer, and blind markers above the
   expect(rosterBox!.y + rosterBox!.height).toBeLessThanOrEqual(contextBox!.y);
 });
 
+test('following the actor scrolls the roster without moving the page', async ({ page }) => {
+  const game = createGame();
+  game.phase = 'betting';
+  game.players = Array.from({ length: 8 }, (_, seat) => createPlayer(`player-${seat}`, `Player ${seat + 1}`, seat));
+  game.actorId = game.players[0].id;
+  const snapshot: Snapshot = {
+    game, you: { id: game.players[0].id, host: true, dealer: true, legal: null },
+    joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: false, serverTime: Date.now(),
+  };
+  let publish = () => {};
+  await page.routeWebSocket('**/ws', socket => {
+    publish = () => socket.send(JSON.stringify({ type: 'state', snapshot }));
+    socket.onMessage(publish);
+  });
+  await page.setViewportSize({ width: 390, height: 400 });
+  await page.goto('/');
+  const roster = page.locator('.player-roster');
+  await expect(roster.locator('.acting')).toContainText('Player 1');
+  const scrollY = await page.evaluate(() => {
+    window.scrollTo(0, document.documentElement.scrollHeight);
+    return window.scrollY;
+  });
+  expect(scrollY).toBeGreaterThan(0);
+  expect((await roster.boundingBox())!.y).toBeLessThan(0);
+  game.actorId = game.players[7].id;
+  publish();
+  await expect(roster.locator('.acting')).toContainText('Player 8');
+  await expect.poll(() => roster.evaluate(el => el.scrollLeft)).toBeGreaterThan(0);
+  expect(await page.evaluate(() => window.scrollY)).toBe(scrollY);
+  const container = (await roster.boundingBox())!, actor = (await roster.locator('.acting').boundingBox())!;
+  expect(actor.x).toBeGreaterThanOrEqual(container.x);
+  expect(actor.x + actor.width).toBeLessThanOrEqual(container.x + container.width + 1);
+});
+
 async function dragSeat(page: Page, from: number, to: number) {
   const source = (await page.locator(`[data-seat="${from}"]`).boundingBox())!, target = (await page.locator(`[data-seat="${to}"]`).boundingBox())!;
   await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
