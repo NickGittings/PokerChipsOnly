@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ClientMsg, Snapshot } from '../../shared/types';
 import { money } from '../../shared/chips';
+import { standings } from '../../shared/standings';
 import { ChipStack } from './Chips';
 import { useDialogFocus } from './useDialogFocus';
 
@@ -28,6 +29,6 @@ export function ShowdownModal({ snapshot, send, connected, dealer = false }: Pro
 export function GameOver({ snapshot }: { snapshot: Snapshot }) {
   const { game } = snapshot;
   if (game.phase !== 'tournament-over') return null;
-  const ordered = [...game.players].sort((a, b) => (a.place ?? 1) - (b.place ?? 1));
-  return <section className="game-panel game-over"><span className="eyebrow">Last player standing</span><div className="champion-symbol">♠</div><h1>{ordered[0]?.name} wins.</h1><p>A good night at the table.</p><ol>{ordered.map(p => <li key={p.id}><span>#{p.place ?? 1}</span><strong>{p.name}</strong><span>{money(p.stack)}</span></li>)}</ol></section>;
+  const ordered = standings(game);
+  return <section className="game-panel game-over"><span className="eyebrow">Last player standing</span><div className="champion-symbol">♠</div><h1>{ordered[0]?.player.name} wins.</h1><p>A good night at the table.</p><ol>{ordered.map(({ player, place }) => <li key={player.id}><span>#{place}</span><strong>{player.name}</strong><span>{money(player.stack)}</span></li>)}</ol></section>;
 }

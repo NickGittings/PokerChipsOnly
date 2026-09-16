@@ -1,7 +1,7 @@
 import type { NetworkInterfaceInfo } from 'node:os';
 
 export function joinUrlCandidates(interfaces: NodeJS.Dict<NetworkInterfaceInfo[]>, clientPort: string, override?: string): string[] {
-  if (override !== undefined) return [override];
+  if (override) return [override];
   const candidates = Object.entries(interfaces).flatMap(([name, entries]) => (entries ?? [])
     .filter(entry => entry.family === 'IPv4' && !entry.internal)
     .map(({ address }) => {

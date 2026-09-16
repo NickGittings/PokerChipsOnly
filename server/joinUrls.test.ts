@@ -16,4 +16,7 @@ describe('LAN join URLs', () => {
     expect(joinUrlCandidates({ en0: [address('192.168.1.2')] }, '5173', 'http://127.0.0.1:3301')).toEqual(['http://127.0.0.1:3301']);
     expect(joinUrlCandidates({}, '3000')).toEqual(['http://localhost:3000']);
   });
+  it('falls back to interface discovery when LAN_URL is defined but empty', () => {
+    expect(joinUrlCandidates({ en0: [address('192.168.1.2')] }, '5173', '')).toEqual(['http://192.168.1.2:5173']);
+  });
 });

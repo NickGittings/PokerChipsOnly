@@ -69,7 +69,7 @@ describe('authoritative multiplayer room', () => {
     const room = new Room(urls, file), host = connect(room, 0);
     room.handle(host.ws, { type: 'setJoinUrl', url: urls[1] });
     const saved = JSON.parse(readFileSync(file, 'utf8'));
-    expect(saved).toMatchObject({ version: 1, joinUrl: urls[1] });
+    expect(saved).toMatchObject({ version: 2, joinUrl: urls[1] });
     expect(new Room(urls, file).joinUrl).toBe(urls[1]);
     expect(new Room(urls[0], file).joinUrl).toBe(urls[0]);
     delete saved.joinUrl; writeFileSync(file, JSON.stringify(saved));
@@ -184,7 +184,7 @@ describe('authoritative multiplayer room', () => {
     const before = structuredClone(room.game);
     room.handle(phones[0].ws, { type: 'rebuy' });
     expect(room.game.players[0]).toMatchObject({ stack: 500, handStartStack: 500, status: 'active' });
-    expect(room.game.players[0].place).toBeUndefined(); expect(room.game.totalChips).toBe(before.totalChips + 500); assertChips(room.game);
+    expect(room.game.players[0].bustOrder).toBeUndefined(); expect(room.game.totalChips).toBe(before.totalChips + 500); assertChips(room.game);
     const after = structuredClone(room.game);
     room.handle(phones[0].ws, { type: 'rebuy' }); expect(room.game).toEqual(after);
     dealer(room, board, 'undo'); expect(room.game.players).toEqual(before.players); expect(room.game.totalChips).toBe(before.totalChips); assertChips(room.game);
@@ -195,7 +195,10 @@ describe('authoritative multiplayer room', () => {
     expect(room.game.players.find(p => p.name === 'Dan')).toMatchObject({ stack: 500, seat: player.seat });
     expect(room.game.totalChips).toBe(before.totalChips + 500); assertChips(room.game);
     expect(room.game.log.some(entry => /took Alice/.test(entry.text))).toBe(true);
-    dealer(room, board, 'undo'); expect(room.game.players).toEqual(before.players); assertChips(room.game);
+    // Taking over a busted seat archives the outgoing player instead of erasing them —
+    // they still surface in the final standings.
+    expect(room.game.eliminated).toEqual([before.players.find(p => p.id === player.id)]);
+    dealer(room, board, 'undo'); expect(room.game.players).toEqual(before.players); expect(room.game.eliminated).toEqual([]); assertChips(room.game);
   });
 
   it.each(['lateBuyIn', 'rebuy'] as const)('rejects an unmakeable %s after color-up without mutation', type => {
@@ -391,12 +394,23 @@ describe('authoritative multiplayer room', () => {
     const directory = mkdtempSync(join(tmpdir(), 'poker-room-')); directories.push(directory);
     const file = join(directory, 'state.json'), { room, board, phones } = table(file); start(room, board);
     act(room, phones, { type: 'raise', amount: 30 });
-    const saved = JSON.parse(readFileSync(file, 'utf8')); expect(saved.version).toBe(1);
+    const saved = JSON.parse(readFileSync(file, 'utf8')); expect(saved.version).toBe(2);
     const recovered = new Room('http://192.168.1.2:3000', file);
     expect(recovered.game.players.map(p => ({ ...p, connected: true }))).toEqual(room.game.players);
     expect(recovered.game.actorId).toBe(room.game.actorId); expect(recovered.game.revision).toBe(room.game.revision);
     expect(recovered.game.clockPaused).toBe(true); expect(recovered.game.players.every(p => !p.connected)).toBe(true);
     expect(connect(recovered, 1).state().you.id).toBe(phones[0].state().you.id); assertChips(recovered.game);
+  });
+
+  it('backfills eliminated and bustSequence when loading a version 1 save from before they existed', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'poker-room-')); directories.push(directory);
+    const file = join(directory, 'state.json'), { room } = table(file);
+    const legacy = JSON.parse(readFileSync(file, 'utf8'));
+    delete legacy.game.eliminated; delete legacy.game.bustSequence; legacy.version = 1;
+    writeFileSync(file, JSON.stringify(legacy));
+    const recovered = new Room(room.joinUrl, file);
+    expect(recovered.game.eliminated).toEqual([]); expect(recovered.game.bustSequence).toBe(0);
+    assertChips(recovered.game);
   });
 
   it('refuses an unsupported or invalid recovery snapshot', () => {

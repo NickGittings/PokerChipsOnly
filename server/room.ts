@@ -24,8 +24,9 @@ export class Room {
     this.joinUrl = this.joinUrls[0];
     if (file && existsSync(file)) {
       const saved = JSON.parse(readFileSync(file, 'utf8'));
-      if (saved.version !== 1) throw new Error('Unsupported save file version. Preserve the file before resetting.');
+      if (saved.version !== 1 && saved.version !== 2) throw new Error('Unsupported save file version. Preserve the file before resetting.');
       this.game = saved.game; this.identities = saved.identities; this.hostToken = saved.hostToken;
+      this.game.eliminated ??= []; this.game.bustSequence ??= 0;
       if (this.joinUrls.includes(saved.joinUrl)) this.joinUrl = saved.joinUrl;
       assertChips(this.game); this.game.players.forEach(p => p.connected = false);
       this.game.clockPaused = true; this.game.clockUpdatedAt = Date.now(); log(this.game, 'Game recovered. Clock paused — resume when the table is ready.');
@@ -33,7 +34,7 @@ export class Room {
   }
   persist() {
     if (!this.file) return;
-    writeFileSync(this.file + '.tmp', JSON.stringify({ version: 1, game: this.game, identities: this.identities, hostToken: this.hostToken, joinUrl: this.joinUrl }), { mode: 0o600 });
+    writeFileSync(this.file + '.tmp', JSON.stringify({ version: 2, game: this.game, identities: this.identities, hostToken: this.hostToken, joinUrl: this.joinUrl }), { mode: 0o600 });
     renameSync(this.file + '.tmp', this.file);
   }
   send(ws: WebSocket, msg: ServerMsg) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg)); }
@@ -109,7 +110,7 @@ export class Room {
         const stack = this.buyInStack();
         const replaced = next.players.find(p => p.seat === msg.seat);
         next.players = next.players.filter(p => p.seat !== msg.seat);
-        if (replaced) log(next, `${msg.name.trim()} took ${replaced.name}’s busted seat ${msg.seat + 1}.`);
+        if (replaced) { next.eliminated.push(replaced); log(next, `${msg.name.trim()} took ${replaced.name}’s busted seat ${msg.seat + 1}.`); }
         next.players.push(createPlayer(id, msg.name.trim(), msg.seat, stack)); next.totalChips += stack;
         this.identities[peer.token].name = msg.name.trim(); log(next, `${msg.name.trim()} bought in for ${stack} chips.`);
       } else if (msg.type === 'rebuy') {
@@ -119,7 +120,6 @@ export class Room {
         if (player.status !== 'busted') throw new Error('Only busted players can buy back in.');
         const stack = this.buyInStack();
         next = adjustStack(this.game, id, stack);
-        next.players.find(p => p.id === id)!.handStartStack = stack;
         next.log.at(-1)!.text = `${player.name} bought back in for ${stack} chips.`;
       } else if (msg.type === 'leaveSeat') {
         if (this.game.phase !== 'lobby') throw new Error('Seats stay reserved during a tournament.');
