@@ -325,6 +325,71 @@ test('time limit shows the final hand and ranks surviving stacks on board and ph
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
+test('player screen pins a roster with turn, dealer, and blind markers above the scrolling panel', async ({ page }) => {
+  const game = createGame();
+  game.phase = 'betting';
+  game.players = [createPlayer('alice', 'Alice', 0, 500), createPlayer('bob', 'Bob', 1, 495), createPlayer('cara', 'Cara', 2, 490)];
+  game.button = 0; game.smallBlindSeat = 1; game.bigBlindSeat = 2; game.actorId = 'bob'; game.totalChips = 1485;
+  const snapshot: Snapshot = {
+    game, you: { id: 'alice', host: false, dealer: false, legal: null },
+    joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: false, serverTime: Date.now(),
+  };
+  await page.routeWebSocket('**/ws', socket => socket.onMessage(() => socket.send(JSON.stringify({ type: 'state', snapshot }))));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  const roster = page.locator('.player-roster'), seats = roster.locator('.roster-seat');
+  await expect(roster).toBeVisible();
+  await expect(seats).toHaveCount(3);
+  await expect(seats.nth(0)).toContainText('Alice'); await expect(seats.nth(0).locator('.seat-markers')).toContainText('D');
+  await expect(seats.nth(1)).toContainText('Bob'); await expect(seats.nth(1).locator('.seat-markers')).toContainText('SB'); await expect(seats.nth(1)).toHaveClass(/acting/);
+  await expect(seats.nth(2)).toContainText('Cara'); await expect(seats.nth(2).locator('.seat-markers')).toContainText('BB');
+  const rosterBox = await roster.boundingBox(), contextBox = await page.locator('.player-context').boundingBox();
+  expect(rosterBox!.y + rosterBox!.height).toBeLessThanOrEqual(contextBox!.y);
+});
+
+async function dragSeat(page: Page, from: number, to: number) {
+  const source = (await page.locator(`[data-seat="${from}"]`).boundingBox())!, target = (await page.locator(`[data-seat="${to}"]`).boundingBox())!;
+  await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, { steps: 10 });
+  await page.mouse.up();
+}
+
+test('board can drag a seated player onto another seat to move or swap them', async ({ page }) => {
+  const game = createGame();
+  game.players = [createPlayer('alice', 'Alice', 0), createPlayer('bob', 'Bob', 1)];
+  const snapshot: Snapshot = {
+    game, you: { id: 'board', host: true, dealer: true, legal: null },
+    joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: false, serverTime: Date.now(),
+  };
+  const moves: { playerId: string; seat: number }[] = [];
+  await page.routeWebSocket('**/ws', socket => {
+    socket.onMessage(raw => {
+      const message = JSON.parse(String(raw));
+      if (message.type === 'moveSeat') {
+        const mover = game.players.find(p => p.id === message.playerId)!, occupant = game.players.find(p => p.seat === message.seat), from = mover.seat;
+        if (occupant) occupant.seat = from;
+        mover.seat = message.seat;
+        moves.push({ playerId: message.playerId, seat: message.seat });
+      }
+      socket.send(JSON.stringify({ type: 'state', snapshot }));
+    });
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/board');
+  await expect(page.locator('[data-seat="0"]')).toContainText('Alice');
+  await dragSeat(page, 0, 5);
+  await expect.poll(() => moves).toEqual([{ playerId: 'alice', seat: 5 }]);
+  await expect(page.locator('[data-seat="5"]')).toContainText('Alice');
+  await expect(page.locator('[data-seat="0"]')).toContainText('Open seat');
+
+  // Dropping onto an occupied seat swaps the two players instead of rejecting the move.
+  await dragSeat(page, 5, 1);
+  await expect.poll(() => moves.length).toBe(2);
+  await expect(page.locator('[data-seat="1"]')).toContainText('Alice');
+  await expect(page.locator('[data-seat="5"]')).toContainText('Bob');
+});
+
 test('expanded corner QR has one address picker and preserves its selection when closed', async ({ page }) => {
   const urls = ['http://192.168.1.2:3000', 'http://10.0.0.2:3000'];
   const snapshot: Snapshot = {

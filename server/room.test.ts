@@ -278,6 +278,59 @@ describe('authoritative multiplayer room', () => {
     expect(room.game.players).toHaveLength(1); expect(room.game.players[0].seat).toBe(7);
   });
 
+  it('lets the dealer move a lobby seat to an empty spot without touching undo history', () => {
+    const { room, board, phones } = table();
+    const aliceId = phones[0].state().you.id, undoCount = room.undoStack.length, revision = room.game.revision;
+    room.handle(board.ws, { type: 'moveSeat', playerId: aliceId, seat: 5, revision });
+    expect(room.game.players.find(p => p.id === aliceId)).toMatchObject({ seat: 5 });
+    expect(room.game.log.at(-1)?.text).toMatch(/moved.*seat 6/i);
+    expect(room.game.revision).toBe(revision + 1); expect(room.undoStack).toHaveLength(undoCount);
+    assertChips(room.game);
+  });
+
+  it('swaps two occupied seats when the dealer drops a player onto a taken seat', () => {
+    const { room, board, phones } = table();
+    const aliceId = phones[0].state().you.id, bobId = phones[1].state().you.id;
+    room.handle(board.ws, { type: 'moveSeat', playerId: aliceId, seat: 1, revision: room.game.revision });
+    expect(room.game.players.find(p => p.id === aliceId)).toMatchObject({ seat: 1 });
+    expect(room.game.players.find(p => p.id === bobId)).toMatchObject({ seat: 0 });
+    expect(room.game.log.at(-1)?.text).toMatch(/swapped/i);
+    assertChips(room.game);
+  });
+
+  it('rejects moveSeat from non-dealers and from stale, out-of-range, or unknown requests', () => {
+    const { room, board, phones } = table();
+    const aliceId = phones[0].state().you.id, before = structuredClone(room.game);
+    room.handle(phones[0].ws, { type: 'moveSeat', playerId: aliceId, seat: 5, revision: room.game.revision });
+    expect(phones[0].error()?.message).toMatch(/host.*board/i); expect(room.game).toEqual(before);
+    room.handle(board.ws, { type: 'moveSeat', playerId: aliceId, seat: 5, revision: room.game.revision + 1 });
+    expect(board.error()?.message).toMatch(/table changed/i); expect(room.game).toEqual(before);
+    for (const seat of [-1, 8, 1.5]) {
+      room.handle(board.ws, { type: 'moveSeat', playerId: aliceId, seat, revision: room.game.revision });
+      expect(board.error()?.message).toMatch(/seat/i); expect(room.game).toEqual(before);
+    }
+    room.handle(board.ws, { type: 'moveSeat', playerId: 'unknown-id', seat: 5, revision: room.game.revision });
+    expect(board.error()?.message).toMatch(/not seated/i); expect(room.game).toEqual(before);
+    room.handle(board.ws, { type: 'moveSeat', playerId: aliceId, seat: 0, revision: room.game.revision });
+    expect(board.error()?.message).toMatch(/already/i); expect(room.game).toEqual(before);
+  });
+
+  it('locks seats mid-hand and unlocks once the hand completes, and the moved seat survives recovery', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'poker-room-')); directories.push(directory);
+    const file = join(directory, 'state.json'), { room, board, phones } = table(file);
+    start(room, board);
+    const aliceId = phones[0].state().you.id, before = structuredClone(room.game);
+    room.handle(board.ws, { type: 'moveSeat', playerId: aliceId, seat: 2, revision: room.game.revision });
+    expect(board.error()?.message).toMatch(/lobby or between hands/i); expect(room.game).toEqual(before);
+    act(room, phones, { type: 'fold' }); act(room, phones, { type: 'fold' });
+    expect(room.game.phase).toBe('hand-complete');
+    room.handle(board.ws, { type: 'moveSeat', playerId: aliceId, seat: 2, revision: room.game.revision });
+    expect(room.game.players.find(p => p.id === aliceId)).toMatchObject({ seat: 2 });
+    assertChips(room.game);
+    const recovered = new Room(room.joinUrl, file);
+    expect(recovered.game.players.find(p => p.id === aliceId)).toMatchObject({ seat: 2 });
+  });
+
   it('rejects unjoined devices, invalid tokens, malformed messages, and ordinary-player administration', () => {
     const { room, phones } = table(); const unknown = socket();
     room.handle(unknown.ws, { type: 'claimSeat', seat: 4, name: 'Unknown' });
