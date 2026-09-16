@@ -65,7 +65,11 @@ export class Room {
     this.broadcast(); this.safePersist();
   }
   safePersist() { try { this.persist(); } catch (error) { console.error('Snapshot could not be saved:', error); for (const ws of this.peers.keys()) this.send(ws, { type: 'error', message: 'Snapshot could not be saved. Keep the server running and check disk access.' }); } }
-  tick(now: number) { this.game = tickClock(this.game, now); this.broadcast(); }
+  tick(now: number) {
+    const next = tickClock(this.game, now);
+    if (next.phase !== this.game.phase || next.pendingLevel !== this.game.pendingLevel || next.clockPaused !== this.game.clockPaused) next.revision++;
+    this.game = next; this.broadcast();
+  }
   buyInStack() {
     const stack = this.game.config.startingStack;
     if (!isMakeable(stack, this.game.config.denominations)) throw new Error('The starting buy-in cannot be made with the current chip denominations.');

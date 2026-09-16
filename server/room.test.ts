@@ -331,6 +331,36 @@ describe('authoritative multiplayer room', () => {
     }
   });
 
+  it('keeps countdown revisions stable but rejects stale dealer intents after blinds advance', () => {
+    const { room, board } = table(); start(room, board);
+    const revision = room.game.revision, now = room.game.clockUpdatedAt;
+    room.tick(now + 1000);
+    expect(room.game.revision).toBe(revision);
+    expect(room.game.elapsedMs).toBe(1000);
+    room.tick(now + room.game.config.levelMinutes * 60_000);
+    expect(room.game.pendingLevel).toBe(2);
+    expect(board.state().game.revision).toBe(revision + 1);
+    const before = structuredClone(room.game);
+    room.handle(board.ws, { type: 'adjustLevel', delta: 1, revision });
+    expect(board.error()?.message).toMatch(/table changed/i); expect(room.game).toEqual(before);
+  });
+
+  it('bumps revision when time expires between hands and rejects a stale pauseClock', () => {
+    const { room, board, phones } = table();
+    room.handle(board.ws, { type: 'startTournament', config: { ...DEFAULT_CONFIG, durationMinutes: 5 } });
+    act(room, phones, { type: 'fold' }); act(room, phones, { type: 'fold' });
+    expect(room.game.phase).toBe('hand-complete');
+    const revision = room.game.revision;
+    room.tick(room.game.clockUpdatedAt + 300_000);
+    expect(room.game).toMatchObject({ phase: 'tournament-over', clockPaused: true, revision: revision + 1 });
+    expect(board.state().game.revision).toBe(revision + 1);
+    const before = structuredClone(room.game);
+    room.handle(board.ws, { type: 'pauseClock', revision });
+    expect(board.error()?.message).toMatch(/table changed/i); expect(room.game).toEqual(before);
+    room.tick(room.game.clockUpdatedAt + 1000);
+    expect(room.game.revision).toBe(revision + 1);
+  });
+
   it('rejects malformed bet amounts without negative chips or state mutation', () => {
     const { room, board, phones } = table(); start(room, board);
     const before = structuredClone(room.game);

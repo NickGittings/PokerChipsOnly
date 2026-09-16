@@ -1,6 +1,7 @@
 import { expect, test, type Browser, type Page } from '@playwright/test';
 import type { Snapshot } from '../shared/types';
-import { createGame, createPlayer } from '../server/engine/state';
+import { createGame, createPlayer, startTournament } from '../server/engine/state';
+import { legalActions } from '../server/engine/betting';
 import { finishHand } from '../server/engine/tournament';
 
 // Observe the same full snapshots the UI receives; actions still use real UI.
@@ -235,6 +236,55 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
   } finally { await Promise.all(phones.map(phone => phone.context.close())); }
 });
 
+
+for (const trigger of ['watchdog', 'screen wake']) test(`a silent socket reconnects on ${trigger} and locks actions until a fresh snapshot`, async ({ page }) => {
+  const lobby = createGame();
+  lobby.players = [createPlayer('alice', 'Alice', 0), createPlayer('bob', 'Bob', 1)];
+  const game = startTournament(lobby, lobby.config);
+  const snapshot: Snapshot = {
+    game, you: { id: game.actorId!, host: false, dealer: false, legal: legalActions(game, game.actorId!) },
+    joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: false, serverTime: Date.now(),
+  };
+  const joins: { token: string }[] = [], publishers: (() => void)[] = [];
+  await page.routeWebSocket('**/ws', socket => {
+    const publish = () => socket.send(JSON.stringify({ type: 'state', snapshot }));
+    publishers.push(publish);
+    socket.onMessage(raw => {
+      joins.push(JSON.parse(String(raw)));
+      if (joins.length === 1) publish();
+    });
+  });
+  // Simulate a transport whose close handshake never completes.
+  await page.addInitScript(() => { WebSocket.prototype.close = () => {}; });
+  await page.clock.install();
+  await page.clock.pauseAt(new Date());
+  await page.goto('/');
+  const call = page.getByRole('button', { name: 'Call', exact: true });
+  await expect(call).toBeEnabled();
+  await page.clock.runFor(3000);
+  game.hand = 2;
+  publishers[0]();
+  await expect(page.locator('.player-game-name')).toContainText('Hand 2');
+  await page.clock.runFor(3000);
+  await expect(call).toBeEnabled();
+  expect(joins).toHaveLength(1);
+  if (trigger === 'watchdog') await page.clock.runFor(1000);
+  else {
+    // Wall time advances during sleep while browser timers are suspended.
+    await page.clock.setSystemTime(new Date(Date.now() + 60_000));
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  }
+  await expect(page.locator('.connection-banner')).toBeVisible();
+  await expect(call).toBeDisabled();
+  await page.clock.runFor(1000);
+  await expect.poll(() => joins.length).toBe(2);
+  expect(joins[1].token).toBe(joins[0].token);
+  publishers[0]();
+  await expect(call).toBeDisabled();
+  publishers[1]();
+  await expect(call).toBeEnabled();
+  await expect(page.locator('.connection-banner')).toHaveCount(0);
+});
 
 test('time limit shows the final hand and ranks surviving stacks on board and phone', async ({ page }) => {
   const game = createGame();
