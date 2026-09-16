@@ -38,6 +38,8 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
   const phones = [alice, bob, cara];
   try {
     await board.goto('/setup');
+    await expect(board.locator('.join-large .qr-well svg')).toBeVisible();
+    await expect(board.locator('.join-large .join-url')).toHaveText('http://127.0.0.1:3301');
     // The elected phone host can visit setup without losing its live connection.
     await expect.poll(() => alice.snapshot()?.you.host).toBe(true);
     await alice.page.getByRole('link', { name: /Set up & start/ }).click();
@@ -56,6 +58,58 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
     await board.goto('/board');
     await expect.poll(() => snapshot()?.game.players.length).toBe(3);
     expect(balances(snapshot())).toEqual([500, 495, 490]); verifyAccounting(snapshot());
+    await expect(board.locator('.join-corner .qr-well svg')).toBeVisible();
+    await expect(board.locator('.board-sidebar .join-panel')).toHaveCount(0);
+    await board.getByRole('button', { name: 'Enlarge join QR code' }).click();
+    await expect(board.getByRole('dialog', { name: 'Join the table', exact: true })).toBeVisible();
+    await board.keyboard.press('Escape');
+    await expect(board.getByRole('button', { name: 'Enlarge join QR code' })).toBeFocused();
+    await board.setViewportSize({ width: 390, height: 844 });
+    await expect(board.getByRole('button', { name: 'Enlarge join QR code' })).toBeVisible();
+    await board.getByRole('button', { name: 'Enlarge join QR code' }).click();
+    await expect(board.locator('.join-qr-overlay .qr-well svg')).toBeVisible();
+    await expect.poll(() => board.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await board.locator('.join-qr-overlay').click({ position: { x: 3, y: 3 } });
+    await expect(board.getByRole('dialog')).toHaveCount(0);
+    await board.setViewportSize({ width: 1440, height: 1000 });
+
+    // Losing site data mid-hand offers names and preserves the seat, chips, and turn.
+    const bobBefore = bob.snapshot().game.players.find(p => p.id === bob.snapshot().you.id)!;
+    await bob.page.evaluate(() => localStorage.clear()); await bob.page.reload();
+    await expect(bob.page.getByRole('heading', { name: 'Who are you?', exact: true })).toBeVisible();
+    await expect(bob.page.locator('.reclaim-player').first()).toContainText('Bob');
+    await expect(bob.page.locator('.reclaim-player').first()).toContainText('Offline');
+    await expect(bob.page.getByRole('button', { name: 'Join as a new player' })).toHaveCount(0);
+    await bob.page.getByRole('button', { name: 'Reclaim Bob, Seat 2', exact: true }).click();
+    await expect.poll(() => bob.snapshot()?.you.id).toBe(bobBefore.id);
+    expect(bob.snapshot().game.players.find(p => p.id === bobBefore.id)).toEqual(bobBefore);
+    await expect(bob.page.locator('.your-stack')).toContainText('495');
+
+    // An old live tab needs confirmation and loses its seat immediately and on reload.
+    const aliceBefore = alice.snapshot().game.players.find(p => p.id === alice.snapshot().you.id)!;
+    const oldToken = await alice.page.evaluate(() => localStorage.getItem('poker-device')!);
+    const oldContext = await browser.newContext({ baseURL: 'http://127.0.0.1:3301' });
+    try {
+      await oldContext.addInitScript(token => localStorage.setItem('poker-device', token), oldToken);
+      const oldPage = await oldContext.newPage(), oldSnapshot = watch(oldPage);
+      await oldPage.goto('/'); await expect.poll(() => oldSnapshot()?.you.id).toBe(aliceBefore.id);
+      await alice.page.evaluate(() => localStorage.clear()); await alice.page.reload();
+      await expect(alice.page.getByRole('heading', { name: 'Who are you?', exact: true })).toBeVisible();
+      await alice.page.getByRole('button', { name: 'Reclaim Alice, Seat 1', exact: true }).click();
+      await expect(alice.page.getByRole('dialog')).toContainText('This player is connected');
+      await alice.page.getByRole('button', { name: 'Cancel', exact: true }).click();
+      expect(alice.snapshot().you.id).not.toBe(aliceBefore.id);
+      await alice.page.getByRole('button', { name: 'Reclaim Alice, Seat 1', exact: true }).click();
+      await alice.page.getByRole('button', { name: 'Yes, this is my seat', exact: true }).click();
+      await expect.poll(() => alice.snapshot()?.you.id).toBe(aliceBefore.id);
+      expect(alice.snapshot().game.players.find(p => p.id === aliceBefore.id)).toEqual(aliceBefore);
+      expect(alice.snapshot().you.legal).not.toBeNull();
+      expect(await alice.page.evaluate(() => localStorage.getItem('poker-name'))).toBe('Alice');
+      await expect(oldPage.getByRole('heading', { name: 'Who are you?', exact: true })).toBeVisible();
+      await oldPage.reload();
+      await expect(oldPage.getByRole('heading', { name: 'Who are you?', exact: true })).toBeVisible();
+      expect(oldSnapshot().you.id).not.toBe(aliceBefore.id);
+    } finally { await oldContext.close(); }
     await board.screenshot({ path: 'test-results/board.png', fullPage: true });
     await alice.page.screenshot({ path: 'test-results/player-mobile.png', fullPage: true });
     await expect.poll(() => alice.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
