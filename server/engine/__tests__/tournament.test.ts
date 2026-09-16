@@ -105,6 +105,23 @@ describe('tournament lifecycle', () => {
     expect(g.log.at(-1)?.text).toBe("Time's up — Player 2 wins on chips."); assertChips(g);
   });
 
+  it('ends the tournament once time expires while resting at hand-complete, without dealing another hand', () => {
+    let g = tickClock(game(3, { durationMinutes: 5 }), 250_000);
+    expect(g.phase).toBe('betting'); expect(g.elapsedMs).toBe(250_000);
+    g = act(g, 'fold'); g = act(g, 'fold');
+    expect(g.phase).toBe('hand-complete'); expect(g.clockPaused).toBe(false);
+    g = tickClock(g, 299_000);
+    expect(g.phase).toBe('hand-complete');
+    g = tickClock(g, 300_000);
+    expect(g.phase).toBe('tournament-over'); expect(g.clockPaused).toBe(true);
+    expect(g.log.at(-1)?.text).toMatch(/Time's up/);
+    expect(() => startHand(g)).toThrow(/Finish this hand/);
+    const logLength = g.log.length;
+    g = tickClock(g, 400_000);
+    expect(g.phase).toBe('tournament-over'); expect(g.log.length).toBe(logLength);
+    assertChips(g);
+  });
+
   it('ties equal survivor stacks while preserving simultaneous and archived bust-out rankings', () => {
     const g = createGame(config({ durationMinutes: 5 }));
     g.players = [200, 300, 300, 100, 50].map((n, i) => createPlayer(`p${i}`, `Player ${i}`, i, n));

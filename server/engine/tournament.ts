@@ -4,6 +4,11 @@ import { blindLevel } from '../../shared/blinds';
 import { placeOf, standings } from '../../shared/standings';
 import { timeUp } from '../../shared/clock';
 import { log } from './helpers';
+function endOnChips(g: GameState) {
+  g.phase = 'tournament-over'; g.clockPaused = true;
+  const leaders = standings(g).filter(({ place }) => place === 1).map(({ player }) => player.name);
+  log(g, leaders.length === 1 ? `Time's up — ${leaders[0]} wins on chips.` : `Time's up — ${leaders.join(' and ')} tie on chips.`);
+}
 export function tickClock(state: GameState, now: number): GameState {
   const g = structuredClone(state);
   if (!g.clockPaused && !['lobby', 'tournament-over'].includes(g.phase)) {
@@ -12,7 +17,9 @@ export function tickClock(state: GameState, now: number): GameState {
     const length = g.config.levelMinutes * 60_000;
     if (g.clockRemainingMs <= 0) { const levels = Math.floor(-g.clockRemainingMs / length) + 1; g.pendingLevel += levels; g.clockRemainingMs += levels * length; }
   }
-  g.clockUpdatedAt = now; return g;
+  g.clockUpdatedAt = now;
+  if (g.phase === 'hand-complete' && timeUp(g)) endOnChips(g);
+  return g;
 }
 export function finishHand(g: GameState) {
   const alive = g.players.filter(p => p.stack > 0);
@@ -26,11 +33,7 @@ export function finishHand(g: GameState) {
   g.actorId = null; g.currentBet = 0;
   g.phase = alive.length === 1 ? 'tournament-over' : 'hand-complete';
   if (alive.length === 1) { g.clockPaused = true; log(g, `${alive[0].name} wins the tournament!`); }
-  else if (timeUp(g)) {
-    g.phase = 'tournament-over'; g.clockPaused = true;
-    const leaders = standings(g).filter(({ place }) => place === 1).map(({ player }) => player.name);
-    log(g, leaders.length === 1 ? `Time's up — ${leaders[0]} wins on chips.` : `Time's up — ${leaders.join(' and ')} tie on chips.`);
-  }
+  else if (timeUp(g)) endOnChips(g);
 }
 export function adjustStack(state: GameState, id: string, delta: number) {
   const g = structuredClone(state), p = g.players.find(p => p.id === id), unit = chipUnit(g.config.denominations);

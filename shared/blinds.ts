@@ -1,10 +1,13 @@
-import type { Config } from './types';
+import type { Config, GameState } from './types';
 import { chipUnit, CHIP_COLORS } from './chips';
 export const DEFAULT_CONFIG: Config = { name: 'Friday Night Poker', denominations: [{ value: 5, color: CHIP_COLORS[0] }, { value: 25, color: CHIP_COLORS[1] }, { value: 100, color: CHIP_COLORS[2] }, { value: 500, color: CHIP_COLORS[4] }], startingStack: 500, smallBlind: 5, bigBlind: 10, multiplier: 2, levelMinutes: 15, durationMinutes: 0, anteMode: 'big-blind', ante: 0 };
 export function blindLevel(c: Config, level: number) {
   const unit = chipUnit(c.denominations), factor = c.multiplier ** (level - 1);
   const round = (n: number) => Math.max(unit, Math.min(Math.floor(1_000_000 / unit) * unit, Math.ceil(n / unit) * unit));
   return { small: round(Math.round(c.smallBlind * factor)), big: round(Math.round(c.bigBlind * factor)), ante: c.ante === 0 ? 0 : round(Math.round(c.ante * factor)) };
+}
+export function levelNotice(g: GameState): string | null {
+  return g.pendingLevel === g.level ? null : `Blinds ${g.pendingLevel > g.level ? 'up' : 'down'} next hand · level ${g.pendingLevel}`;
 }
 export function validateConfig(c: Config): string[] {
   const errors: string[] = [];

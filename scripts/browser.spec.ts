@@ -81,7 +81,7 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
     await expect.poll(() => snapshot()?.game.pendingLevel).toBe(2);
     expect(snapshot().game.level).toBe(1);
     expect(snapshot().game.elapsedMs).toBe(elapsed);
-    await expect(board.locator('.blind-timer')).toContainText('Blinds up next hand · level 2');
+    await expect(board.locator('.level-notice')).toContainText('Blinds up next hand · level 2');
     await expect.poll(() => alice.snapshot()?.game.pendingLevel).toBe(2);
     await alice.page.getByRole('button', { name: 'Blinds ↓', exact: true }).click();
     await expect.poll(() => snapshot()?.game.pendingLevel).toBe(1);
