@@ -1,0 +1,13 @@
+import { useState } from 'react';
+import type { ClientMsg, Snapshot } from '../../shared/types';
+import { chipUnit } from '../../shared/chips';
+import { blindLevel } from '../../shared/blinds';
+
+export function HostPanel({ snapshot, send, connected }: { snapshot: Snapshot; send: (msg: ClientMsg) => void; connected: boolean }) {
+  const { game } = snapshot;
+  const [playerId, setPlayerId] = useState('');
+  const [delta, setDelta] = useState(0);
+  const unit = chipUnit(game.config.denominations);
+  const colorUp = game.config.denominations.length > 2 && unit < blindLevel(game.config, game.level).small / 10;
+  return <section className="game-panel host-panel"><div className="panel-heading"><span className="eyebrow">Dealer controls</span><span className="tiny-badge">HOST</span></div><div className="host-buttons"><button className="game-button" disabled={!connected || !snapshot.canUndo} onClick={() => send({ type: 'undo', revision: game.revision })}>↶ Undo last action</button><button className="game-button" disabled={!connected} onClick={() => send({ type: 'pauseClock', revision: game.revision })}>{game.clockPaused ? '▶ Resume clock' : 'Ⅱ Pause clock'}</button>{game.phase === 'hand-complete' && <button className="game-button primary wide" disabled={!connected} onClick={() => send({ type: 'nextHand', revision: game.revision })}>Deal next hand →</button>}</div>{colorUp && <div className="color-up-note"><p>The smallest chips are ready to retire. Color up between hands when all stacks can be represented.</p><button className="game-button" disabled={!connected || !['lobby', 'hand-complete'].includes(game.phase)} onClick={() => send({ type: 'colorUp', revision: game.revision })}>Color up chips</button></div>}<details><summary>Adjust a stack</summary><p className="muted">Rebuys, add-ons, or corrections. Every adjustment is logged.</p><label className="field-label" htmlFor="adjust-player">Player</label><select id="adjust-player" value={playerId} onChange={e => setPlayerId(e.target.value)}><option value="">Choose a player</option>{game.players.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select><label className="field-label" htmlFor="adjust-delta">Add or subtract chips</label><div className="adjust-row"><input id="adjust-delta" type="number" value={delta} step={unit} onChange={e => setDelta(Number(e.target.value))} /><button className="game-button" disabled={!connected || !['hand-complete', 'tournament-over'].includes(game.phase) || !playerId || !delta || !Number.isSafeInteger(delta) || delta % unit !== 0} onClick={() => { send({ type: 'hostAdjust', playerId, delta, revision: game.revision }); setDelta(0); }}>Apply</button></div></details></section>;
+}
