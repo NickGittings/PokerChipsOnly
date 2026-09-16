@@ -711,3 +711,108 @@ describe('authoritative multiplayer room', () => {
     expect(() => new Room('http://localhost:3000', file)).toThrow(/accounting/i);
   });
 });
+
+
+describe('dealer seat removal', () => {
+  it('frees a lobby seat and restores device ownership on undo', () => {
+    const { room, board, phones } = table();
+    const player = structuredClone(room.game.players[0]);
+    room.handle(board.ws, { type: 'removePlayer', playerId: player.id, revision: room.game.revision });
+    expect(room.game.players.some(p => p.id === player.id)).toBe(false);
+    expect(phones[0].state().you.id).not.toBe(player.id);
+    expect(board.state().canUndo).toBe(true);
+    dealer(room, board, 'undo');
+    expect(room.game.players[0]).toEqual(player);
+    expect(phones[0].state().you.id).toBe(player.id);
+    assertChips(room.game);
+  });
+
+  it.each(['claimSeat', 'lateBuyIn', 'leaveSeat', 'moveSeat', 'reclaimSeat'] as const)('invalidates removal undo after lobby %s without reverting seating', type => {
+    const { room, board, phones } = table();
+    const removedId = phones[0].state().you.id;
+    room.handle(board.ws, { type: 'removePlayer', playerId: removedId, revision: room.game.revision });
+    expect(board.state().canUndo).toBe(true);
+    if (type === 'claimSeat' || type === 'lateBuyIn') {
+      room.handle(phones[0].ws, { type, seat: 3, name: 'New player' });
+    } else if (type === 'leaveSeat') {
+      room.handle(phones[1].ws, { type });
+    } else if (type === 'moveSeat') {
+      room.handle(board.ws, { type, playerId: phones[1].state().you.id, seat: 3, revision: room.game.revision });
+    } else {
+      const playerId = phones[1].state().you.id;
+      room.disconnect(phones[1].ws);
+      room.handle(phones[0].ws, { type, playerId });
+    }
+    const after = structuredClone(room.game), identities = structuredClone(room.identities);
+    expect(room.game.players.some(p => p.id === removedId)).toBe(false);
+    expect(board.state().canUndo).toBe(false);
+    dealer(room, board, 'undo');
+    expect(board.error()?.message).toBe('Nothing to undo.');
+    expect(room.game).toEqual(after); expect(room.identities).toEqual(identities);
+    assertChips(room.game);
+  });
+
+  it('keeps removal undo available after a rejected lobby seat claim', () => {
+    const { room, board, phones } = table();
+    const removedId = phones[0].state().you.id;
+    room.handle(board.ws, { type: 'removePlayer', playerId: removedId, revision: room.game.revision });
+    room.handle(phones[0].ws, { type: 'claimSeat', seat: 1, name: 'New player' });
+    expect(phones[0].error()?.message).toMatch(/seat was just taken/);
+    expect(board.state().canUndo).toBe(true);
+    dealer(room, board, 'undo');
+    expect(phones[0].state().you.id).toBe(removedId);
+    expect(room.game.players).toHaveLength(3);
+  });
+
+  it('preserves finished standings until a new game reopens seat management', () => {
+    const { room, board, phones } = table(); start(room, board);
+    act(room, phones, { type: 'fold' }); act(room, phones, { type: 'fold' });
+    for (const player of room.game.players.slice(1)) {
+      room.handle(board.ws, { type: 'hostAdjust', playerId: player.id, delta: -player.stack, revision: room.game.revision });
+    }
+    expect(room.game.phase).toBe('tournament-over');
+    const before = structuredClone(room.game), ranks = standings(room.game), identities = structuredClone(room.identities), undo = structuredClone(room.undoStack);
+    for (const player of room.game.players) {
+      room.handle(board.ws, { type: 'removePlayer', playerId: player.id, revision: room.game.revision });
+      expect(board.error()?.message).toMatch(/Start a new game/);
+      expect(room.game).toEqual(before); expect(standings(room.game)).toEqual(ranks);
+      expect(room.identities).toEqual(identities); expect(room.undoStack).toEqual(undo);
+    }
+    room.handle(board.ws, { type: 'newGame', revision: room.game.revision });
+    room.handle(board.ws, { type: 'removePlayer', playerId: before.players[0].id, revision: room.game.revision });
+    expect(room.game.phase).toBe('lobby'); expect(room.game.players).toHaveLength(2);
+    assertChips(room.game);
+  });
+
+  it('rejects non-dealers, stale requests, unknown players, and removal during a hand', () => {
+    const { room, board, phones } = table();
+    const playerId = room.game.players[0].id;
+    const before = structuredClone(room.game);
+    room.handle(phones[1].ws, { type: 'removePlayer', playerId, revision: room.game.revision });
+    expect(phones[1].error()?.message).toMatch(/host.*board/);
+    room.handle(board.ws, { type: 'removePlayer', playerId, revision: -1 });
+    expect(board.error()?.message).toMatch(/table changed/);
+    room.handle(board.ws, { type: 'removePlayer', playerId: 'unknown', revision: room.game.revision });
+    expect(board.error()?.message).toMatch(/not seated/);
+    expect(room.game).toEqual(before);
+    start(room, board);
+    const live = structuredClone(room.game);
+    room.handle(board.ws, { type: 'removePlayer', playerId, revision: room.game.revision });
+    expect(board.error()?.message).toMatch(/between hands/);
+    expect(room.game).toEqual(live);
+  });
+
+  it('withdraws chips between hands, ends with one survivor, and undoes both changes', () => {
+    const { room, board, phones } = table(); start(room, board);
+    act(room, phones, { type: 'fold' }); act(room, phones, { type: 'fold' });
+    const before = structuredClone(room.game), removed = before.players[0];
+    room.handle(board.ws, { type: 'removePlayer', playerId: removed.id, revision: room.game.revision });
+    expect(room.game.phase).toBe('hand-complete');
+    expect(room.game.totalChips).toBe(before.totalChips - removed.stack); assertChips(room.game);
+    room.handle(board.ws, { type: 'removePlayer', playerId: room.game.players[0].id, revision: room.game.revision });
+    expect(room.game.phase).toBe('tournament-over'); expect(room.game.clockPaused).toBe(true); assertChips(room.game);
+    dealer(room, board, 'undo'); dealer(room, board, 'undo');
+    expect(room.game.players).toEqual(before.players); expect(room.game.totalChips).toBe(before.totalChips);
+    expect(phones[0].state().you.id).toBe(removed.id); assertChips(room.game);
+  });
+});

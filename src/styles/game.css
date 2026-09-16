@@ -58,3 +58,13 @@ button.allin-action:hover:not(:disabled){background:#367b50}
 .reclaim-player strong{overflow-wrap:anywhere}.reclaim-seat{color:var(--label);font-size:11px}.reclaim-player small{grid-column:2/-1;color:var(--label)}.reclaim-player .reclaim-live{color:#9fdbb3}
 .late-buy-in{margin:20px 0}.late-buy-in .join-form{margin-top:16px}
 @media(max-width:520px){.board-page:not(.board-lobby) + .app-footer{padding-bottom:calc(95px + env(safe-area-inset-bottom))}.join-corner{width:auto;padding:12px 16px}.join-corner-trigger{min-height:24px}.join-corner .qr-well,.join-corner>.join-url,.join-corner>.join-url-picker{display:none}}
+
+/* Keep the pot outside the scrolling stack panel on player devices. */
+.player-hand>.player-pot-row{flex-shrink:0;margin:0;padding:12px 14px;border:1px solid #d9b26a55;border-radius:12px;background:#123921;flex-wrap:wrap}
+.player-hand>.player-pot-row>div:first-child{min-width:100px;flex:1}
+.player-hand>.player-pot-row>div>strong{font-size:30px;color:var(--gold)}
+.player-hand>.player-pot-row .chip-stacks{display:none}
+.host-seat-list{display:flex;flex-direction:column;gap:8px}
+.host-seat-list>div{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}
+.host-seat-list>div>span{overflow-wrap:anywhere;min-width:0}
+.host-seat-list .game-button{min-height:44px;padding:8px 10px;font-size:11px;flex-shrink:0}
