@@ -10,7 +10,7 @@ export function config(overrides: Partial<Config> = {}): Config {
 export function game(count = 3, overrides: Partial<Config> = {}): GameState {
   const c = config(overrides), g = createGame(c);
   g.players = Array.from({ length: count }, (_, i) => createPlayer(`p${i}`, `Player ${i}`, i));
-  return startTournament(g, c);
+  const dealt = startTournament(g, c); dealt.awaitingDeal = false; return dealt;
 }
 
 export function stacked(stacks: number[], overrides: Partial<Config> = {}): GameState {
@@ -18,10 +18,12 @@ export function stacked(stacks: number[], overrides: Partial<Config> = {}): Game
   g.players = stacks.map((stack, i) => createPlayer(`p${i}`, `Player ${i}`, i, stack));
   g.totalChips = stacks.reduce((sum, n) => sum + n, 0);
   g.phase = 'hand-complete';
-  return startHand(g);
+  const dealt = startHand(g); dealt.awaitingDeal = false; return dealt;
 }
 
 export function act(g: GameState, type: 'fold' | 'check' | 'call' | 'all-in' | 'bet' | 'raise', amount?: number) {
+  // Betting fixtures assume the physical cards have been dealt.
+  if (g.awaitingDeal) { g = structuredClone(g); g.awaitingDeal = false; }
   if (!g.actorId) throw new Error('No acting player');
   return applyAction(g, g.actorId, { type, amount });
 }

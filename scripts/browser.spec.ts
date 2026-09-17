@@ -36,7 +36,7 @@ function verifyAccounting(snapshot: Snapshot) {
 test('board and three phones play, reconnect, and award a layered all-in pot', async ({ browser, page: board }) => {
   await board.setViewportSize({ width: 1440, height: 1000 });
   const snapshot = watch(board); await board.goto('/board');
-  await expect.poll(() => snapshot()?.you.dealer).toBe(true);
+  await expect.poll(() => snapshot()?.you.admin).toBe(true);
   await expect(board.locator('.join-corner')).toHaveCount(0);
   await expect(board.locator('.board-sidebar .join-panel')).toBeVisible();
   const alice = await phone(browser, 'Alice', 0), bob = await phone(browser, 'Bob', 1), cara = await phone(browser, 'Cara', 2);
@@ -51,9 +51,15 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
     await expect(board.locator('.join-large .qr-well canvas')).toBeVisible();
     await expect(board.locator('.join-large .join-url')).toHaveText('http://127.0.0.1:3301');
     // Host election never grants controls to a player connection.
-    await expect.poll(() => alice.snapshot()?.you.dealer).toBe(false);
+    await expect.poll(() => alice.snapshot()?.you.admin).toBe(false);
     await expect(alice.page.getByRole('link', { name: /Set up & start/ })).toHaveCount(0);
     await expect(board.getByRole('button', { name: /Start tournament/i })).toBeEnabled();
+    await board.getByRole('button', { name: 'By hands', exact: true }).click();
+    await expect(board.getByLabel('Raise blinds every N hands')).toHaveValue('10');
+    await expect(board.locator('.level-preview')).toContainText('Hand 11');
+    await board.getByLabel('Raise blinds every N hands').fill('3');
+    await expect(board.locator('.level-preview')).toContainText('Hand 4');
+    await expect(board.getByLabel('Level length (min)')).toHaveCount(0);
     const turbo = board.getByRole('button', { name: 'Turbo', exact: true });
     await turbo.click();
     await expect(board.getByLabel('Level length (min)')).toHaveValue('8');
@@ -73,6 +79,19 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
     await board.goto('/board');
     await expect.poll(() => snapshot()?.game.players.length).toBe(3);
     expect(balances(snapshot())).toEqual([500, 495, 490]); verifyAccounting(snapshot());
+    await expect(alice.page.getByRole('dialog')).toContainText(/Deal the\s*hole cards/i);
+    await expect(board.getByRole('dialog')).toContainText(/Waiting for Alice\s*to deal/);
+    for (const phone of phones) await expect.poll(() => phone.snapshot()?.you.legal).toBeNull();
+    await expect.poll(() => alice.snapshot()?.you.dealing).toBe(true);
+    await expect.poll(() => snapshot()?.you.dealing).toBe(false);
+    await alice.page.getByRole('button', { name: /Cards dealt/ }).click();
+    await expect.poll(() => snapshot()?.game.awaitingDeal).toBe(false);
+    await expect.poll(() => alice.snapshot()?.you.legal).not.toBeNull();
+    await expect(alice.page.locator('.notice-stack')).toContainText(/Your turn/i);
+    await expect(board.locator('.seat-card.seat-sb')).toHaveCount(1);
+    await expect(board.locator('.seat-card.seat-bb')).toHaveCount(1);
+    await expect(bob.page.locator('.your-stack')).toHaveClass(/seat-sb/);
+    await expect(cara.page.locator('.your-stack')).toHaveClass(/seat-bb/);
     await expect(board.getByText('Game ends in', { exact: true })).toBeVisible();
     await expect(bob.page.getByRole('button', { name: 'Blinds ↑', exact: true })).toHaveCount(0);
     await expect(alice.page.locator('.host-panel')).toHaveCount(0);
@@ -145,6 +164,7 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
       expect(alice.snapshot().you.legal).not.toBeNull();
       expect(await alice.page.evaluate(() => localStorage.getItem('poker-name'))).toBe('Alice');
     } finally { await oldContext.close(); }
+    for (const page of [board, alice.page]) for (const button of await page.locator('.notice-toast button').all()) await button.click();
     await board.screenshot({ path: 'test-results/board.png', fullPage: true });
     await alice.page.screenshot({ path: 'test-results/player-mobile.png', fullPage: true });
     await expect.poll(() => alice.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -152,7 +172,7 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
       await alice.page.setViewportSize({ width: 390, height });
       const pot = alice.page.locator('.player-pot-row');
       await expect(pot).toBeInViewport({ ratio: 1 });
-      await expect(pot.locator('strong').first()).toHaveText('15');
+      await expect(pot.locator('strong').first()).toHaveText('$15');
       await alice.page.locator('.player-context').evaluate(el => { el.scrollTop = el.scrollHeight; });
       await expect(pot).toBeInViewport({ ratio: 1 });
     }
@@ -170,18 +190,21 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
     }
     async function cardsDealt(street: 'flop' | 'turn' | 'river') {
       await expect.poll(() => snapshot().game.pendingStreet).toBe(street);
-      await expect(board.getByRole('dialog')).toContainText(new RegExp(`Deal the\\s*${street}`, 'i'));
+      const dealer = phones.find(phone => phone.snapshot().you.dealing)!;
+      await expect(dealer.page.getByRole('dialog')).toContainText(new RegExp(`Deal the\\s*${street}`, 'i'));
+      await expect(board.getByRole('dialog')).toContainText(new RegExp(`Waiting for ${snapshot().game.players.find(p => p.id === dealer.snapshot().you.id)!.name}\\s*to deal`));
       expect(snapshot().game.phase).toBe('street-break');
       for (const phone of phones) await expect.poll(() => phone.snapshot()?.you.legal).toBeNull();
       const revision = snapshot().game.revision;
-      await board.getByRole('button', { name: /Cards dealt/ }).click();
+      await dealer.page.getByRole('button', { name: /Cards dealt/ }).click();
       await expect.poll(() => snapshot().game.revision).toBeGreaterThan(revision);
       expect(snapshot().game.street).toBe(street); verifyAccounting(snapshot());
     }
     async function award(name: string) {
       const revision = snapshot().game.revision;
-      await board.getByRole('button', { name: `Select winner ${name}`, exact: true }).click();
-      await board.getByRole('button', { name: /Award pot/ }).click();
+      const dealer = phones.find(phone => phone.snapshot().you.dealing)!;
+      await dealer.page.getByRole('button', { name: `Select winner ${name}`, exact: true }).click();
+      await dealer.page.getByRole('button', { name: /Award pot/ }).click();
       await expect.poll(() => snapshot().game.revision).toBeGreaterThan(revision);
       verifyAccounting(snapshot());
     }
@@ -198,10 +221,14 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
     await cardsDealt('turn'); await clickAction('Check'); await clickAction('Check');
     await cardsDealt('river'); await clickAction('Check'); await clickAction('Check');
     await expect.poll(() => snapshot().game.phase).toBe('showdown');
-    await expect(board.getByRole('button', { name: 'Select winner Cara', exact: true })).toHaveCount(0);
+    await expect(alice.page.getByRole('button', { name: 'Select winner Cara', exact: true })).toHaveCount(0);
     await award('Alice');
     expect(balances(snapshot())).toEqual([540, 470, 490]);
     await expect.poll(() => snapshot().game.phase).toBe('hand-complete');
+    await board.getByText('Night report', { exact: true }).click();
+    await expect(board.locator('.night-report')).toContainText('3 buy-ins & buy-backs');
+    await expect(board.locator('.report-player').filter({ hasText: 'Alice' })).toContainText('+$40');
+    await expect(board.locator('.report-player').filter({ hasText: 'Alice' })).toContainText('hand 1');
 
     // Reload a real phone context: localStorage must bind its existing seat.
     const aliceId = alice.snapshot().you.id;
@@ -210,9 +237,22 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
     await expect.poll(() => alice.snapshot()?.game.players.find(p => p.id === aliceId)?.connected).toBe(true);
     expect(snapshot().game.players).toHaveLength(3);
 
-    await board.getByRole('button', { name: /Next hand/i }).click();
+    await expect(alice.page.getByRole('button', { name: 'Deal next hand →', exact: true })).toBeVisible();
+    await board.getByRole('button', { name: 'Deal next hand →', exact: true }).click();
     await expect.poll(() => snapshot().game.hand).toBe(2);
     expect(balances(snapshot())).toEqual([530, 470, 485]);
+    await expect(bob.page.getByRole('dialog')).toContainText(/Deal the\s*hole cards/i);
+    await expect(board.getByRole('dialog')).toContainText(/Waiting for Bob\s*to deal/);
+    await expect(alice.page.getByRole('button', { name: /Cards dealt/ })).toHaveCount(0);
+    // A disconnected button phone hands the prompt to the board; reconnect restores it.
+    await bob.page.goto('about:blank');
+    await expect.poll(() => snapshot()?.you.dealing).toBe(true);
+    await expect(board.getByRole('button', { name: /Cards dealt/ })).toBeVisible();
+    await bob.page.goto('/');
+    await expect.poll(() => bob.snapshot()?.you.dealing).toBe(true);
+    await expect.poll(() => snapshot()?.you.dealing).toBe(false);
+    await bob.page.getByRole('button', { name: /Cards dealt/ }).click();
+    await expect.poll(() => snapshot()?.game.awaitingDeal).toBe(false);
     // Bob 470, Cara 490; Alice calls the effective maximum and keeps 50.
     await clickAction('All in'); await clickAction('All in'); await clickAction('Call');
     expect(balances(snapshot())).toEqual([50, 0, 0]);
@@ -221,7 +261,7 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
     expect(snapshot().game.pots.map(p => p.amount)).toEqual([1410, 40]);
     expect(snapshot().game.pots.map(p => p.eligibleIds.length)).toEqual([3, 2]);
     await award('Bob');
-    await expect(board.getByRole('button', { name: 'Select winner Bob', exact: true })).toHaveCount(0);
+    await expect(bob.page.getByRole('button', { name: 'Select winner Bob', exact: true })).toHaveCount(0);
     await award('Cara');
     expect(balances(snapshot())).toEqual([50, 1410, 40]);
     expect(snapshot().game.phase).toBe('hand-complete'); verifyAccounting(snapshot());
@@ -256,9 +296,9 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
 for (const trigger of ['watchdog', 'screen wake']) test(`a silent socket reconnects on ${trigger} and locks actions until a fresh snapshot`, async ({ page }) => {
   const lobby = createGame();
   lobby.players = [createPlayer('alice', 'Alice', 0), createPlayer('bob', 'Bob', 1)];
-  const game = startTournament(lobby, lobby.config);
+  const game = startTournament(lobby, lobby.config); game.awaitingDeal = false;
   const snapshot: Snapshot = {
-    game, you: { id: game.actorId!, host: false, dealer: false, legal: legalActions(game, game.actorId!) },
+    game, you: { id: game.actorId!, host: false, admin: false, dealing: false, legal: legalActions(game, game.actorId!) },
     joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: false, serverTime: Date.now(),
   };
   const joins: { token: string }[] = [], publishers: (() => void)[] = [];
@@ -312,7 +352,7 @@ test('time limit shows the final hand and ranks surviving stacks on board and ph
   game.players = [createPlayer('alice', 'Alice', 0, 300), createPlayer('bob', 'Bob', 1, 600), createPlayer('cara', 'Cara', 2, 600)];
   game.totalChips = 1500;
   const snapshot: Snapshot = {
-    game, you: { id: 'alice', host: true, dealer: true, legal: null },
+    game, you: { id: 'alice', host: true, admin: true, dealing: true, legal: null },
     joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: true, serverTime: Date.now(),
   };
   let publish = () => {};
@@ -332,12 +372,14 @@ test('time limit shows the final hand and ranks surviving stacks on board and ph
   await expect(page.locator('.game-over')).toContainText('Time — final chip counts');
   await expect(page.locator('.game-over')).toContainText('The clock ran out. Standings by chips.');
   await expect(page.getByRole('heading', { name: 'Bob and Cara tie.', exact: true })).toBeVisible();
-  await expect(page.locator('.game-over li')).toHaveText(['#1Bob$600', '#1Cara$600', '#3Alice$300']);
+  await expect(page.locator('.game-over .report-player header strong')).toHaveText(['#1Bob', '#1Cara', '#3Alice']);
+  await expect(page.locator('.game-over .report-player')).toHaveCount(3);
   await expect(page.locator('.host-panel')).toHaveCount(0);
   await page.goto('/board');
   await expect(page.getByRole('button', { name: 'Blinds ↑', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Blinds ↓', exact: true })).toBeDisabled();
-  await expect(page.locator('.game-over li')).toHaveText(['#1Bob$600', '#1Cara$600', '#3Alice$300']);
+  await expect(page.locator('.game-over .report-player header strong')).toHaveText(['#1Bob', '#1Cara', '#3Alice']);
+  await expect(page.locator('.game-over .report-player')).toHaveCount(3);
   await expect(page.getByText("Time's up · final hand", { exact: true })).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
@@ -348,10 +390,11 @@ test('player screen pins a roster with turn, dealer, and blind markers above the
   game.players = [createPlayer('alice', 'Alice', 0, 500), createPlayer('bob', 'Bob', 1, 495), createPlayer('cara', 'Cara', 2, 490)];
   game.button = 0; game.smallBlindSeat = 1; game.bigBlindSeat = 2; game.actorId = 'bob'; game.totalChips = 1485;
   const snapshot: Snapshot = {
-    game, you: { id: 'alice', host: false, dealer: false, legal: null },
+    game, you: { id: 'alice', host: false, admin: false, dealing: false, legal: null },
     joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: false, serverTime: Date.now(),
   };
-  await page.routeWebSocket('**/ws', socket => socket.onMessage(() => socket.send(JSON.stringify({ type: 'state', snapshot }))));
+  let publish = () => {};
+  await page.routeWebSocket('**/ws', socket => { publish = () => socket.send(JSON.stringify({ type: 'state', snapshot })); socket.onMessage(publish); });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
   const roster = page.locator('.player-roster'), seats = roster.locator('.roster-seat');
@@ -359,9 +402,19 @@ test('player screen pins a roster with turn, dealer, and blind markers above the
   await expect(seats).toHaveCount(3);
   await expect(seats.nth(0)).toContainText('Alice'); await expect(seats.nth(0).locator('.seat-markers')).toContainText('D');
   await expect(seats.nth(1)).toContainText('Bob'); await expect(seats.nth(1).locator('.seat-markers')).toContainText('SB'); await expect(seats.nth(1)).toHaveClass(/acting/);
+  await expect(seats.nth(1)).toHaveClass(/seat-sb/);
+  await expect(seats.nth(2)).toHaveClass(/seat-bb/);
   await expect(seats.nth(2)).toContainText('Cara'); await expect(seats.nth(2).locator('.seat-markers')).toContainText('BB');
   const rosterBox = await roster.boundingBox(), contextBox = await page.locator('.player-context').boundingBox();
   expect(rosterBox!.y + rosterBox!.height).toBeLessThanOrEqual(contextBox!.y);
+  const actingFill = await seats.nth(1).evaluate(el => getComputedStyle(el).backgroundColor);
+  const bigBlindFill = await seats.nth(2).evaluate(el => getComputedStyle(el).backgroundColor);
+  expect(actingFill).not.toBe(bigBlindFill);
+  game.actorId = 'cara'; publish();
+  await expect(seats.nth(2)).toHaveClass(/acting/);
+  await expect(seats.nth(2)).toHaveCSS('background-color', actingFill);
+  expect(await seats.nth(1).evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe(actingFill);
+  expect(await seats.nth(1).evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe(bigBlindFill);
 });
 
 test('following the actor scrolls the roster without moving the page', async ({ page }) => {
@@ -370,7 +423,7 @@ test('following the actor scrolls the roster without moving the page', async ({ 
   game.players = Array.from({ length: 8 }, (_, seat) => createPlayer(`player-${seat}`, `Player ${seat + 1}`, seat));
   game.actorId = game.players[0].id;
   const snapshot: Snapshot = {
-    game, you: { id: game.players[0].id, host: true, dealer: true, legal: null },
+    game, you: { id: game.players[0].id, host: true, admin: true, dealing: true, legal: null },
     joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: false, serverTime: Date.now(),
   };
   let publish = () => {};
@@ -410,7 +463,7 @@ test('board can drag a seated player onto another seat to move or swap them', as
   const game = createGame();
   game.players = [createPlayer('alice', 'Alice', 0), createPlayer('bob', 'Bob', 1)];
   const snapshot: Snapshot = {
-    game, you: { id: 'board', host: true, dealer: true, legal: null },
+    game, you: { id: 'board', host: true, admin: true, dealing: true, legal: null },
     joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: false, serverTime: Date.now(),
   };
   const moves: { playerId: string; seat: number }[] = [];
@@ -445,7 +498,7 @@ test('expanded corner QR has one address picker and preserves its selection when
   const urls = ['http://192.168.1.2:3000', 'http://10.0.0.2:3000'];
   const snapshot: Snapshot = {
     game: { ...createGame(), phase: 'hand-complete' },
-    you: { id: 'board', host: true, dealer: true, legal: null },
+    you: { id: 'board', host: true, admin: true, dealing: true, legal: null },
     joinUrl: urls[0], joinUrls: urls, canUndo: false, serverTime: Date.now(),
   };
   await page.routeWebSocket('**/ws', socket => {
@@ -467,4 +520,47 @@ test('expanded corner QR has one address picker and preserves its selection when
   await expect(picker).toHaveCount(1);
   await expect(picker).toHaveValue(urls[1]);
   await expect(page.locator('.join-corner .join-url')).toHaveText(urls[1]);
+});
+
+test('hands pacing counts down at hand boundaries while the overall time limit remains visible', async ({ page }) => {
+  const game = createGame();
+  game.config.blindPace = 'hands'; game.config.levelHands = 3; game.config.durationMinutes = 60;
+  game.phase = 'betting'; game.hand = 1; game.clockPaused = false;
+  game.players = [createPlayer('alice', 'Alice', 0, 500), createPlayer('bob', 'Bob', 1, 500)]; game.totalChips = 1000;
+  const snapshot: Snapshot = { game, you: { id: 'alice', host: false, admin: false, dealing: false, legal: null }, joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now() };
+  let publish = () => {};
+  await page.routeWebSocket('**/ws', socket => { publish = () => socket.send(JSON.stringify({ type: 'state', snapshot })); socket.onMessage(publish); });
+  await page.setViewportSize({ width: 390, height: 667 });
+  await page.goto('/');
+  const timer = page.locator('.player-hand .blind-timer');
+  await expect(timer).toContainText('in 3 hands'); await expect(timer).toContainText('Game ends in');
+  await expect(page.locator('.player-pot-row')).toBeInViewport({ ratio: 1 });
+  game.hand = 3; game.levelStartHand = 3; game.pendingLevel = 2; publish();
+  await expect(timer).toContainText('in 1 hand');
+  game.hand = 4; game.level = 2; publish();
+  await expect(timer).toContainText('Level 2'); await expect(timer).toContainText('in 3 hands');
+});
+
+test('in-app notices detect legal actions unlocking for the same actor and do not repeat on snapshots', async ({ page }) => {
+  const lobby = createGame(); lobby.players = [createPlayer('alice', 'Alice', 0), createPlayer('bob', 'Bob', 1)];
+  const game = startTournament(lobby, lobby.config);
+  const snapshot: Snapshot = { game, you: { id: game.actorId!, host: false, admin: false, dealing: true, legal: null }, joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now() };
+  let publish = () => {};
+  await page.routeWebSocket('**/ws', socket => { publish = () => socket.send(JSON.stringify({ type: 'state', snapshot })); socket.onMessage(publish); });
+  await page.goto('/');
+  await expect(page.locator('.notice-deal')).toContainText('deal the hole cards');
+  await page.getByRole('button', { name: /Dismiss .*deal the hole cards/ }).click();
+  game.awaitingDeal = false; snapshot.you.legal = legalActions(game, game.actorId!); publish();
+  await expect(page.locator('.notice-turn')).toHaveCount(1);
+  await expect(page.locator('.notice-turn')).toContainText('Your turn');
+  publish(); await expect(page.locator('.notice-turn')).toHaveCount(1);
+  const title = await page.title();
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }); document.dispatchEvent(new Event('visibilitychange')); });
+  await expect.poll(() => page.title()).toBe('Your turn to act');
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => false }); document.dispatchEvent(new Event('visibilitychange')); });
+  await expect(page).toHaveTitle(title);
+  await page.getByRole('button', { name: 'Dismiss Your turn to act', exact: true }).click();
+  publish(); await expect(page.locator('.notice-turn')).toHaveCount(0);
+  game.players[1].status = 'busted'; game.players[1].stack = 0; game.players[1].bustOrder = 1; publish();
+  await expect(page.locator('.notice-bust.notice-urgent')).toContainText('Bob busted · finished #2');
 });

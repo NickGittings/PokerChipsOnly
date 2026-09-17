@@ -1,5 +1,10 @@
-import type { GameState, Player } from '../../shared/types';
+import type { GameState, LedgerKind, Player } from '../../shared/types';
 export function log(g: GameState, text: string) { g.log.push({ id: ++g.logSequence, text }); g.log = g.log.slice(-150); }
+export function record(g: GameState, p: Player, kind: LedgerKind, amount: number) {
+  g.ledger.push({ hand: g.hand, playerId: p.id, name: p.name, kind, amount });
+  let excess = g.ledger.length - 1000;
+  if (excess > 0) g.ledger = g.ledger.filter(e => e.kind !== 'hand' || excess-- <= 0);
+}
 export function nextSeat(players: Player[], seat: number) { return [...players].sort((a, b) => ((a.seat - seat + 7) % 8) - ((b.seat - seat + 7) % 8))[0]; }
 export const contenders = (g: GameState) => g.players.filter(p => p.status === 'active' || p.status === 'all-in');
 export function pay(p: Player, amount: number, street = true, deadAnte = false) { const paid = Math.min(p.stack, amount); p.stack -= paid; p.committedThisHand += paid; if (street) p.committedThisStreet += paid; if (deadAnte) p.deadAnte = (p.deadAnte ?? 0) + paid; if (!p.stack) p.status = 'all-in'; return paid; }

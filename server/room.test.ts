@@ -27,8 +27,9 @@ function table(file: string | null = null) {
   phones.forEach((phone, seat) => room.handle(phone.ws, { type: 'claimSeat', seat, name: ['Alice', 'Bob', 'Cara'][seat] }));
   return { room, board, phones };
 }
-function start(room: Room, board: Device) { room.handle(board.ws, { type: 'startTournament', config: DEFAULT_CONFIG }); expect(room.game.phase).toBe('betting'); }
+function start(room: Room, board: Device) { room.handle(board.ws, { type: 'startTournament', config: DEFAULT_CONFIG }); expect(room.game.phase).toBe('betting'); dealer(room, board, 'dealerConfirm'); }
 function act(room: Room, phones: Device[], action: Action) {
+  if (room.game.awaitingDeal) { const dealing = phones.find(p => p.state().you.dealing)!; room.handle(dealing.ws, { type: 'dealerConfirm', revision: room.game.revision }); }
   const phone = phones.find(p => p.state().you.id === room.game.actorId)!;
   room.handle(phone.ws, { type: 'action', action, revision: room.game.revision });
   return phone;
@@ -40,7 +41,7 @@ afterEach(() => { for (const directory of directories.splice(0)) rmSync(director
 describe('authoritative multiplayer room', () => {
   it('elects the first device host and sends personalized snapshots without tokens', () => {
     const { room, board, phones } = table(); start(room, board);
-    expect(board.state().you).toMatchObject({ host: true, dealer: true, legal: null });
+    expect(board.state().you).toMatchObject({ host: true, admin: true, legal: null });
     expect(phones.map(p => p.state().you.host)).toEqual([false, false, false]);
     expect(phones.filter(p => p.state().you.legal)).toHaveLength(1);
     expect(new Set(phones.map(p => p.state().you.id)).size).toBe(3);
@@ -347,14 +348,14 @@ describe('authoritative multiplayer room', () => {
     const room = new Room('http://localhost:3000', null), host = connect(room, 1), phone = connect(room, 2), board = connect(room, 0, true);
     room.handle(host.ws, { type: 'claimSeat', seat: 0, name: 'Alice' });
     room.handle(phone.ws, { type: 'claimSeat', seat: 1, name: 'Bob' });
-    expect(board.state().you).toMatchObject({ host: false, dealer: true }); start(room, board);
+    expect(board.state().you).toMatchObject({ host: false, admin: true }); start(room, board);
   });
 
   it('does not retain board permission on a player connection after host failover', () => {
     const { room, board, phones } = table();
     room.disconnect(board.ws); expect(phones[0].state().you.host).toBe(true);
     const setup = connect(room, 0, false);
-    expect(setup.state().you).toMatchObject({ host: false, dealer: false });
+    expect(setup.state().you).toMatchObject({ host: false, admin: false });
     room.handle(setup.ws, { type: 'startTournament', config: DEFAULT_CONFIG });
     expect(setup.error()?.message).toMatch(/board admin/i);
     const boardSetup = connect(room, 0, true);
@@ -610,9 +611,12 @@ describe('authoritative multiplayer room', () => {
     const file = join(directory, 'state.json'), { room, board } = table(file); start(room, board);
     const legacy = JSON.parse(readFileSync(file, 'utf8'));
     delete legacy.game.elapsedMs; delete legacy.game.config.durationMinutes;
+    delete legacy.game.ledger; delete legacy.game.levelStartHand; delete legacy.game.awaitingDeal;
+    delete legacy.game.config.blindPace; delete legacy.game.config.levelHands;
     writeFileSync(file, JSON.stringify(legacy));
     const recovered = new Room(room.joinUrl, file);
     expect(recovered.game.elapsedMs).toBe(0); expect(recovered.game.config.durationMinutes).toBe(0);
+    expect(recovered.game).toMatchObject({ ledger: [], levelStartHand: 0, awaitingDeal: false, config: { blindPace: 'time', levelHands: 10 } });
     recovered.game.clockPaused = false; recovered.tick(recovered.game.clockUpdatedAt + 1000);
     expect(recovered.game.elapsedMs).toBe(1000); expect(Number.isFinite(recovered.game.clockRemainingMs)).toBe(true); assertChips(recovered.game);
   });
@@ -721,7 +725,7 @@ describe('board-only administration and total time', () => {
     const room = new Room('http://localhost:3000', null), phone = connect(room, 1);
     const board = connect(room, 0, true);
     const check = () => {
-      expect(phone.state().you).toMatchObject({ host: true, dealer: false });
+      expect(phone.state().you).toMatchObject({ host: true, admin: false });
       expect(phone.state().canUndo).toBe(false);
       const before = structuredClone(room.game);
       for (const type of ['startTournament', 'setJoinUrl', 'undo', 'pauseClock', 'adjustDuration', 'adjustLevel', 'dealerConfirm', 'awardPot', 'hostAdjust', 'colorUp', 'moveSeat', 'nextHand', 'newGame', 'removePlayer']) {
@@ -736,10 +740,10 @@ describe('board-only administration and total time', () => {
   it('isolates board and player connections sharing a saved device token', () => {
     const { room, board } = table(); start(room, board);
     const playerTab = connect(room, 0);
-    expect(playerTab.state().you.dealer).toBe(false);
+    expect(playerTab.state().you.admin).toBe(false);
     room.handle(playerTab.ws, { type: 'undo', revision: room.game.revision });
     expect(playerTab.error()?.message).toMatch(/board admin/i);
-    expect(board.state().you.dealer).toBe(true);
+    expect(board.state().you.admin).toBe(true);
   });
 
   it('changes total time in 15-minute steps, preserves paused clocks and survives hand undo', () => {
@@ -865,5 +869,136 @@ describe('dealer seat removal', () => {
     dealer(room, board, 'undo'); dealer(room, board, 'undo');
     expect(room.game.players).toEqual(before.players); expect(room.game.totalChips).toBe(before.totalChips);
     expect(phones[0].state().you.id).toBe(removed.id); assertChips(room.game);
+  });
+});
+
+describe('button dealer and hand accounting', () => {
+  it('locks the hole-card deal, preserves posted blinds on confirmation, and passes dealing to the next button', () => {
+    const { room, board, phones } = table();
+    room.handle(board.ws, { type: 'startTournament', config: DEFAULT_CONFIG });
+    expect(room.game.awaitingDeal).toBe(true);
+    expect(board.state().you).toMatchObject({ admin: true, dealing: false, legal: null });
+    expect(phones.map(p => p.state().you.dealing)).toEqual([true, false, false]);
+    expect(phones.every(p => p.state().you.legal === null)).toBe(true);
+    const before = structuredClone(room.game);
+    room.handle(phones[0].ws, { type: 'action', action: { type: 'call' }, revision: room.game.revision });
+    expect(phones[0].error()?.message).toMatch(/not your turn/); expect(room.game).toEqual(before);
+    for (const type of ['dealerConfirm', 'awardPot', 'nextHand']) {
+      room.handle(phones[1].ws, { type, potIndex: 0, winnerIds: [phones[1].state().you.id], revision: room.game.revision });
+      expect(phones[1].error()?.message).toMatch(/board admin/); expect(room.game).toEqual(before);
+    }
+    room.handle(phones[0].ws, { type: 'dealerConfirm', revision: room.game.revision - 1 });
+    expect(phones[0].error()?.message).toMatch(/table changed/); expect(room.game).toEqual(before);
+    dealer(room, phones[0], 'dealerConfirm');
+    expect(room.game.awaitingDeal).toBe(false); expect(room.game.players).toEqual(before.players);
+    expect(phones[0].state().you.legal).not.toBeNull(); assertChips(room.game);
+    dealer(room, board, 'undo'); expect(room.game.awaitingDeal).toBe(true);
+    dealer(room, phones[0], 'dealerConfirm'); act(room, phones, { type: 'fold' }); act(room, phones, { type: 'fold' });
+    dealer(room, phones[0], 'nextHand');
+    expect(room.game).toMatchObject({ hand: 2, awaitingDeal: true });
+    expect(phones.map(p => p.state().you.dealing)).toEqual([false, true, false]);
+    dealer(room, phones[0], 'dealerConfirm'); expect(room.game.awaitingDeal).toBe(true);
+    dealer(room, phones[1], 'dealerConfirm'); expect(room.game.awaitingDeal).toBe(false); assertChips(room.game);
+  });
+
+  it('lets the acting dealer confirm streets and award pots without gaining admin permissions', () => {
+    const { room, board, phones } = table(); start(room, board);
+    act(room, phones, { type: 'call' }); act(room, phones, { type: 'call' }); act(room, phones, { type: 'check' });
+    for (let street = 0; street < 3; street++) { dealer(room, phones[0], 'dealerConfirm'); for (let p = 0; p < 3; p++) act(room, phones, { type: 'check' }); }
+    expect(room.game.phase).toBe('showdown');
+    const before = structuredClone(room.game);
+    room.handle(phones[0].ws, { type: 'hostAdjust', playerId: phones[0].state().you.id, delta: 5, revision: room.game.revision });
+    expect(phones[0].error()?.message).toMatch(/board admin/); expect(room.game).toEqual(before);
+    room.handle(phones[0].ws, { type: 'awardPot', potIndex: 0, winnerIds: [phones[1].state().you.id], revision: room.game.revision });
+    expect(room.game.phase).toBe('hand-complete');
+    expect(room.game.ledger.filter(e => e.kind === 'hand').map(e => e.amount)).toEqual([-10, 20, -10]); assertChips(room.game);
+  });
+
+  it('hands the deal back to the board when the button phone disconnects and returns it on reconnect', () => {
+    const { room, board, phones } = table();
+    expect(board.state().you.dealing).toBe(true);
+    room.handle(board.ws, { type: 'startTournament', config: DEFAULT_CONFIG });
+    expect(board.state().you.dealing).toBe(false);
+    room.disconnect(phones[0].ws); expect(board.state().you.dealing).toBe(true);
+    dealer(room, board, 'dealerConfirm'); expect(room.game.awaitingDeal).toBe(false);
+    const returned = connect(room, 1);
+    expect(returned.state().you.dealing).toBe(true); expect(board.state().you.dealing).toBe(false);
+    dealer(room, board, 'undo');
+    dealer(room, board, 'dealerConfirm'); expect(room.game.awaitingDeal).toBe(false); assertChips(room.game);
+  });
+
+  it('requires a separate hole-card confirmation when the blinds put everyone all-in', () => {
+    const { room, board, phones } = table();
+    room.handle(board.ws, { type: 'startTournament', config: { ...DEFAULT_CONFIG, startingStack: 5, anteMode: 'per-player', ante: 5 } });
+    expect(room.game).toMatchObject({ phase: 'street-break', pendingStreet: 'flop', awaitingDeal: true });
+    const players = structuredClone(room.game.players);
+    dealer(room, phones[0], 'dealerConfirm');
+    expect(room.game).toMatchObject({ phase: 'street-break', street: 'preflop', pendingStreet: 'flop', awaitingDeal: false });
+    expect(room.game.players).toEqual(players);
+    dealer(room, phones[0], 'dealerConfirm'); expect(room.game.street).toBe('flop'); assertChips(room.game);
+  });
+
+  it('records investments, adjustments, and withdrawals and reverts ledger entries with undo and reset', () => {
+    const { room, board, phones } = table(); start(room, board);
+    expect(room.game.ledger.map(e => [e.name, e.kind, e.amount, e.hand])).toEqual(['Alice', 'Bob', 'Cara'].map(name => [name, 'buy-in', 500, 0]));
+    act(room, phones, { type: 'fold' }); act(room, phones, { type: 'fold' });
+    const alice = room.game.players[0];
+    room.handle(board.ws, { type: 'hostAdjust', playerId: alice.id, delta: -alice.stack, revision: room.game.revision });
+    expect(room.game.ledger.at(-1)).toMatchObject({ playerId: alice.id, kind: 'adjust', amount: -500 });
+    const before = structuredClone(room.game.ledger);
+    room.handle(phones[0].ws, { type: 'rebuy' });
+    expect(room.game.ledger.at(-1)).toMatchObject({ playerId: alice.id, kind: 'buy-back', amount: 500 });
+    dealer(room, board, 'undo'); expect(room.game.ledger).toEqual(before);
+    const fresh = socket(); room.handle(fresh.ws, { type: 'join', token: 'late_ledger_device_00001' });
+    room.handle(fresh.ws, { type: 'lateBuyIn', name: 'Dan', seat: 0 });
+    expect(room.game.ledger.at(-1)).toMatchObject({ name: 'Dan', kind: 'buy-in', amount: 500 });
+    expect(room.game.ledger[0].name).toBe('Alice');
+    const dan = room.game.players.find(p => p.name === 'Dan')!;
+    room.handle(board.ws, { type: 'removePlayer', playerId: dan.id, revision: room.game.revision });
+    expect(room.game.ledger.at(-1)).toMatchObject({ playerId: dan.id, name: 'Dan', kind: 'adjust', amount: -500 });
+    room.handle(board.ws, { type: 'newGame', revision: room.game.revision });
+    expect(room.game).toMatchObject({ ledger: [], awaitingDeal: false, levelStartHand: 0 }); assertChips(room.game);
+  });
+
+  it('undoes automatic hand-based level queues at the boundary while retaining manual blind changes', () => {
+    const { room, board, phones } = table();
+    room.handle(board.ws, { type: 'startTournament', config: { ...DEFAULT_CONFIG, blindPace: 'hands', levelHands: 10 } });
+    while (room.game.hand < 9) { act(room, phones, { type: 'fold' }); act(room, phones, { type: 'fold' }); dealer(room, board, 'nextHand'); }
+    act(room, phones, { type: 'fold' }); act(room, phones, { type: 'fold' });
+    dealer(room, board, 'nextHand'); expect(room.game).toMatchObject({ hand: 10, level: 1, pendingLevel: 2, levelStartHand: 10 });
+    dealer(room, board, 'undo'); expect(room.game).toMatchObject({ hand: 9, pendingLevel: 1, levelStartHand: 0 });
+    dealer(room, board, 'nextHand'); act(room, phones, { type: 'fold' }); act(room, phones, { type: 'fold' });
+    dealer(room, board, 'nextHand'); expect(room.game).toMatchObject({ hand: 11, level: 2, pendingLevel: 2 });
+    dealer(room, board, 'undo'); expect(room.game).toMatchObject({ hand: 10, level: 1, pendingLevel: 2, levelStartHand: 10 });
+    dealer(room, board, 'nextHand'); dealer(room, board, 'dealerConfirm'); act(room, phones, { type: 'fold' });
+    room.handle(board.ws, { type: 'adjustLevel', delta: 1, revision: room.game.revision });
+    dealer(room, board, 'undo'); expect(room.game).toMatchObject({ hand: 11, level: 2, pendingLevel: 3, levelStartHand: 11 }); assertChips(room.game);
+  });
+
+  it('leaves older undo snapshots\' level-start-hand alone when adjustLevel walks the stack', () => {
+    const { room, board, phones } = table();
+    room.handle(board.ws, { type: 'startTournament', config: { ...DEFAULT_CONFIG, blindPace: 'hands', levelHands: 10 } });
+    while (room.game.hand < 4) { act(room, phones, { type: 'fold' }); act(room, phones, { type: 'fold' }); dealer(room, board, 'nextHand'); }
+    act(room, phones, { type: 'fold' }); act(room, phones, { type: 'fold' });
+    expect(room.game).toMatchObject({ hand: 4, phase: 'hand-complete', levelStartHand: 0 });
+    room.handle(board.ws, { type: 'adjustLevel', delta: 1, revision: room.game.revision });
+    expect(room.game).toMatchObject({ pendingLevel: 2, levelStartHand: 4 });
+    while (room.game.hand === 4) dealer(room, board, 'undo');
+    // A snapshot from an earlier hand keeps its own (unstarted) level-start-hand rather than
+    // being stamped with the hand it happened to be undone alongside.
+    expect(room.game).toMatchObject({ hand: 3, pendingLevel: 2, levelStartHand: 0 }); assertChips(room.game);
+  });
+
+  it('recovers the ledger, hand counter, queued level, and undealt hand from a current save', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'poker-room-')); directories.push(directory);
+    const file = join(directory, 'state.json'), { room, board, phones } = table(file);
+    room.handle(board.ws, { type: 'startTournament', config: { ...DEFAULT_CONFIG, blindPace: 'hands', levelHands: 3 } });
+    for (let hand = 1; hand < 3; hand++) { act(room, phones, { type: 'fold' }); act(room, phones, { type: 'fold' }); dealer(room, board, 'nextHand'); }
+    const recovered = new Room(room.joinUrl, file);
+    expect(recovered.game).toMatchObject({ hand: 3, level: 1, pendingLevel: 2, levelStartHand: 3, awaitingDeal: true, config: { blindPace: 'hands', levelHands: 3 } });
+    expect(recovered.game.ledger).toEqual(room.game.ledger);
+    const recoveredBoard = connect(recovered, 0, true);
+    expect(recoveredBoard.state().you.dealing).toBe(true);
+    dealer(recovered, recoveredBoard, 'dealerConfirm'); expect(recovered.game.awaitingDeal).toBe(false); assertChips(recovered.game);
   });
 });
