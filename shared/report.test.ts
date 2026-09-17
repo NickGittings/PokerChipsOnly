@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createGame, createPlayer } from '../server/engine/state';
+import { record } from '../server/engine/helpers';
 import { report } from './report';
 
 describe('night report', () => {
@@ -46,4 +47,10 @@ describe('night report', () => {
     expect(report(g).players[0]).toMatchObject({ buyIns: 1, invested: 1200, net: 0 });
   });
   it('starts an empty report for a new night', () => { expect(report(createGame())).toEqual({ players: [], totalBuyIns: 0, hands: 0 }); });
+  it('keeps the buy-in on a long night that pushes the ledger past its cap', () => {
+    const g = createGame(), p = createPlayer('a', 'Alice', 0, 500);
+    g.players = [p]; record(g, p, 'buy-in', 500);
+    for (let hand = 1; hand <= 1200; hand++) { g.hand = hand; record(g, p, 'hand', 1); }
+    expect(report(g).players[0]).toMatchObject({ buyIns: 1, invested: 500 });
+  });
 });

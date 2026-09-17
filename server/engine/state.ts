@@ -1,9 +1,9 @@
 import type { Config, GameState, Player } from '../../shared/types';
-import { DEFAULT_CONFIG, blindLevel, validateConfig } from '../../shared/blinds';
+import { DEFAULT_CONFIG, blindLevel, levelLengthMs, validateConfig } from '../../shared/blinds';
 import { log, nextSeat, pay, record } from './helpers';
 import { settleRound } from './betting';
 export function createGame(config: Config = DEFAULT_CONFIG, now = 0): GameState {
-  return { config: structuredClone(config), players: [], eliminated: [], phase: 'lobby', street: 'preflop', hand: 0, awaitingDeal: false, levelStartHand: 0, button: -1, smallBlindSeat: -1, bigBlindSeat: -1, actorId: null, currentBet: 0, lastFullRaiseSize: config.bigBlind, pots: [], log: [], ledger: [], logSequence: 0, level: 1, pendingLevel: 1, clockRemainingMs: config.levelMinutes * 60_000, clockUpdatedAt: now, clockPaused: true, elapsedMs: 0, totalChips: 0, bustSequence: 0, revision: 0 };
+  return { config: structuredClone(config), players: [], eliminated: [], phase: 'lobby', street: 'preflop', hand: 0, awaitingDeal: false, levelStartHand: 0, button: -1, smallBlindSeat: -1, bigBlindSeat: -1, actorId: null, currentBet: 0, lastFullRaiseSize: config.bigBlind, pots: [], log: [], ledger: [], logSequence: 0, level: 1, pendingLevel: 1, clockRemainingMs: levelLengthMs(config), clockUpdatedAt: now, clockPaused: true, elapsedMs: 0, totalChips: 0, bustSequence: 0, revision: 0 };
 }
 export function createPlayer(id: string, name: string, seat: number, stack = 0): Player { return { id, name, seat, stack, committedThisStreet: 0, committedThisHand: 0, status: 'active', hasActedThisRound: false, actedAtBet: 0, connected: true, handStartStack: stack }; }
 export function startTournament(state: GameState, config: Config, now = 0) {

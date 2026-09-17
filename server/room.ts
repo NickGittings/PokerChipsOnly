@@ -190,7 +190,9 @@ export class Room {
       assertChips(next);
       if (msg.type === 'adjustLevel' && next.config.blindPace === 'hands') {
         // Manual changes survive undo; automatic hand-boundary increments remain undoable.
-        for (const entry of [...this.undoStack].reverse()) { if (entry.game.phase === 'lobby') break; entry.game.pendingLevel = Math.max(1, entry.game.pendingLevel + msg.delta); entry.game.levelStartHand = entry.game.hand; }
+        // Only the snapshot at the current hand shares next's levelStartHand — older
+        // snapshots keep their own, so undoing further back doesn't restart their countdown.
+        for (const entry of [...this.undoStack].reverse()) { if (entry.game.phase === 'lobby') break; entry.game.pendingLevel = Math.max(1, entry.game.pendingLevel + msg.delta); if (entry.game.hand === next.hand) entry.game.levelStartHand = next.levelStartHand; }
       }
       const seatChurn = ['claimSeat', 'leaveSeat', 'reclaimSeat', 'moveSeat'].includes(msg.type) || msg.type === 'lateBuyIn' && this.game.phase === 'lobby';
       // Lobby seating changes are not undoable. Older whole-game snapshots would

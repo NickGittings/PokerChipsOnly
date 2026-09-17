@@ -105,7 +105,7 @@ describe('tournament lifecycle', () => {
     expect(g).toMatchObject({ phase: 'tournament-over', clockPaused: true }); assertChips(g);
   });
 
-  it('records hand deltas once for participants and retains at most a thousand ledger entries', () => {
+  it('records hand deltas once for participants and caps the ledger by trimming hand rows only', () => {
     let g = game(3);
     g = act(g, 'fold'); g = act(g, 'fold');
     expect(g.ledger.filter(e => e.kind === 'hand').map(e => [e.playerId, e.amount])).toEqual([['p1', -5], ['p2', 5]]);
@@ -113,8 +113,15 @@ describe('tournament lifecycle', () => {
     g = startHand(g); g = act(g, 'fold');
     expect(g.ledger.filter(e => e.kind === 'hand' && e.playerId === 'p1')).toHaveLength(1);
     expect(g.ledger.filter(e => e.kind === 'hand' && e.hand === 2).reduce((sum, e) => sum + e.amount, 0)).toBe(0);
+    const buyIns = g.ledger.filter(e => e.kind === 'buy-in'), adjustsSoFar = g.ledger.filter(e => e.kind === 'adjust').length;
+    // The 1000-row cap only ever evicts 'hand' rows (oldest first). Buy-ins and adjustments
+    // drive the night report's totals, so they're never trimmed — even past the cap, as here,
+    // where flooding in adjustments outlasts the handful of hand rows there are to sacrifice.
     for (let i = 0; i < 1002; i++) g = adjustStack(g, 'p0', i % 2 ? -5 : 5);
-    expect(g.ledger).toHaveLength(1000); expect(g.ledger.every(e => e.kind === 'adjust')).toBe(true); assertChips(g);
+    expect(g.ledger.filter(e => e.kind === 'hand')).toHaveLength(0);
+    expect(g.ledger.filter(e => e.kind === 'buy-in')).toEqual(buyIns);
+    expect(g.ledger.filter(e => e.kind === 'adjust')).toHaveLength(adjustsSoFar + 1002);
+    assertChips(g);
   });
 
   it('ranks simultaneous bust-outs by starting stack and ties equal stacks', () => {

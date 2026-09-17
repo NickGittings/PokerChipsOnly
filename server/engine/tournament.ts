@@ -1,6 +1,6 @@
 import type { GameState, LedgerKind } from '../../shared/types';
 import { chipUnit } from '../../shared/chips';
-import { blindLevel } from '../../shared/blinds';
+import { blindLevel, levelLengthMs } from '../../shared/blinds';
 import { placeOf, standings } from '../../shared/standings';
 import { timeUp } from '../../shared/clock';
 import { log, record } from './helpers';
@@ -16,7 +16,7 @@ export function tickClock(state: GameState, now: number): GameState {
     g.elapsedMs += elapsed;
     if (g.config.blindPace === 'time') {
       g.clockRemainingMs -= elapsed;
-      const length = g.config.levelMinutes * 60_000;
+      const length = levelLengthMs(g.config);
       if (g.clockRemainingMs <= 0) { const levels = Math.floor(-g.clockRemainingMs / length) + 1; g.pendingLevel += levels; g.clockRemainingMs += levels * length; }
     }
   }
@@ -55,7 +55,7 @@ export function adjustLevel(state: GameState, delta: number) {
   if (delta !== 1 && delta !== -1) throw new Error('Move the blind level up or down by one.');
   if (state.pendingLevel + delta < 1) throw new Error('Blinds cannot drop below level 1.');
   const g = structuredClone(state);
-  g.pendingLevel += delta; g.levelStartHand = g.hand; g.clockRemainingMs = g.config.levelMinutes * 60_000;
+  g.pendingLevel += delta; g.levelStartHand = g.hand; g.clockRemainingMs = levelLengthMs(g.config);
   log(g, `Host moved blinds ${delta > 0 ? 'up' : 'down'} to level ${g.pendingLevel}.`); return g;
 }
 export function colorUpSuggested(g: GameState) { return g.config.denominations.length > 2 && chipUnit(g.config.denominations) < blindLevel(g.config, g.level).small / 10; }

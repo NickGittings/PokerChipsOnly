@@ -1,6 +1,9 @@
 import type { Config, GameState } from './types';
 import { chipUnit, CHIP_COLORS } from './chips';
 export const DEFAULT_CONFIG: Config = { name: 'Friday Night Poker', denominations: [{ value: 5, color: CHIP_COLORS[0] }, { value: 25, color: CHIP_COLORS[1] }, { value: 100, color: CHIP_COLORS[2] }, { value: 500, color: CHIP_COLORS[4] }], startingStack: 500, smallBlind: 5, bigBlind: 10, multiplier: 2, levelMinutes: 15, blindPace: 'time', levelHands: 10, durationMinutes: 0, anteMode: 'big-blind', ante: 0 };
+// levelMinutes is unvalidated in 'hands' pace (see validateConfig below), so this guards the
+// arithmetic against a stray 0/NaN reaching it (e.g. via a stale localStorage setup config).
+export const levelLengthMs = (c: Config) => (Number.isFinite(c.levelMinutes) ? Math.max(0, c.levelMinutes) : 0) * 60_000;
 export function blindLevel(c: Config, level: number) {
   const unit = chipUnit(c.denominations), factor = c.multiplier ** (level - 1);
   const round = (n: number) => Math.max(unit, Math.min(Math.floor(1_000_000 / unit) * unit, Math.ceil(n / unit) * unit));

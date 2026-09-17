@@ -975,6 +975,20 @@ describe('button dealer and hand accounting', () => {
     dealer(room, board, 'undo'); expect(room.game).toMatchObject({ hand: 11, level: 2, pendingLevel: 3, levelStartHand: 11 }); assertChips(room.game);
   });
 
+  it('leaves older undo snapshots\' level-start-hand alone when adjustLevel walks the stack', () => {
+    const { room, board, phones } = table();
+    room.handle(board.ws, { type: 'startTournament', config: { ...DEFAULT_CONFIG, blindPace: 'hands', levelHands: 10 } });
+    while (room.game.hand < 4) { act(room, phones, { type: 'fold' }); act(room, phones, { type: 'fold' }); dealer(room, board, 'nextHand'); }
+    act(room, phones, { type: 'fold' }); act(room, phones, { type: 'fold' });
+    expect(room.game).toMatchObject({ hand: 4, phase: 'hand-complete', levelStartHand: 0 });
+    room.handle(board.ws, { type: 'adjustLevel', delta: 1, revision: room.game.revision });
+    expect(room.game).toMatchObject({ pendingLevel: 2, levelStartHand: 4 });
+    while (room.game.hand === 4) dealer(room, board, 'undo');
+    // A snapshot from an earlier hand keeps its own (unstarted) level-start-hand rather than
+    // being stamped with the hand it happened to be undone alongside.
+    expect(room.game).toMatchObject({ hand: 3, pendingLevel: 2, levelStartHand: 0 }); assertChips(room.game);
+  });
+
   it('recovers the ledger, hand counter, queued level, and undealt hand from a current save', () => {
     const directory = mkdtempSync(join(tmpdir(), 'poker-room-')); directories.push(directory);
     const file = join(directory, 'state.json'), { room, board, phones } = table(file);
