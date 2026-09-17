@@ -45,13 +45,9 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
     await board.goto('/setup');
     await expect(board.locator('.join-large .qr-well canvas')).toBeVisible();
     await expect(board.locator('.join-large .join-url')).toHaveText('http://127.0.0.1:3301');
-    // The elected phone host can visit setup without losing its live connection.
-    await expect.poll(() => alice.snapshot()?.you.host).toBe(true);
-    await alice.page.getByRole('link', { name: /Set up & start/ }).click();
-    await expect(alice.page.getByRole('button', { name: /Start tournament/i })).toBeEnabled();
-    await expect.poll(() => alice.snapshot()?.you.host).toBe(true);
-    await alice.page.locator('.brand').click();
-    await expect(alice.page.getByRole('heading', { name: /You’re in, Alice/ })).toBeVisible();
+    // Host election never grants controls to a player connection.
+    await expect.poll(() => alice.snapshot()?.you.dealer).toBe(false);
+    await expect(alice.page.getByRole('link', { name: /Set up & start/ })).toHaveCount(0);
     await expect(board.getByRole('button', { name: /Start tournament/i })).toBeEnabled();
     const turbo = board.getByRole('button', { name: 'Turbo', exact: true });
     await turbo.click();
@@ -74,23 +70,30 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
     expect(balances(snapshot())).toEqual([500, 495, 490]); verifyAccounting(snapshot());
     await expect(board.getByText('Game ends in', { exact: true })).toBeVisible();
     await expect(bob.page.getByRole('button', { name: 'Blinds ↑', exact: true })).toHaveCount(0);
-    await expect(alice.page.getByRole('button', { name: 'Blinds ↓', exact: true })).toBeDisabled();
+    await expect(alice.page.locator('.host-panel')).toHaveCount(0);
     await board.getByRole('button', { name: /Pause clock/ }).click();
     await expect.poll(() => snapshot()?.game.clockPaused).toBe(true);
     const elapsed = snapshot().game.elapsedMs;
+    await board.getByRole('button', { name: '+15 min', exact: true }).click();
+    await expect.poll(() => snapshot()?.game.config.durationMinutes).toBe(105);
+    await expect.poll(() => alice.snapshot()?.game.config.durationMinutes).toBe(105);
+    await board.getByRole('button', { name: '−15 min', exact: true }).click();
+    await expect.poll(() => snapshot()?.game.config.durationMinutes).toBe(90);
+
     await board.getByRole('button', { name: 'Blinds ↑', exact: true }).click();
     await expect.poll(() => snapshot()?.game.pendingLevel).toBe(2);
     expect(snapshot().game.level).toBe(1);
     expect(snapshot().game.elapsedMs).toBe(elapsed);
     await expect(board.locator('.level-notice')).toContainText('Blinds up next hand · level 2');
     await expect.poll(() => alice.snapshot()?.game.pendingLevel).toBe(2);
-    await alice.page.getByRole('button', { name: 'Blinds ↓', exact: true }).click();
+    await board.getByRole('button', { name: 'Blinds ↓', exact: true }).click();
     await expect.poll(() => snapshot()?.game.pendingLevel).toBe(1);
     expect(snapshot().game.elapsedMs).toBe(elapsed);
     await expect(board.getByRole('button', { name: 'Blinds ↓', exact: true })).toBeDisabled();
     await board.getByRole('button', { name: /Resume clock/ }).click();
     await expect.poll(() => snapshot()?.game.clockPaused).toBe(false);
     await expect(board.locator('.join-corner .qr-well canvas')).toBeVisible();
+    expect((await board.locator('.join-corner').boundingBox())!.x).toBeLessThan(50);
     await expect(board.locator('.board-sidebar .join-panel')).toHaveCount(0);
     await board.getByRole('button', { name: 'Enlarge join QR code' }).click();
     await expect(board.getByRole('dialog', { name: 'Join the table', exact: true })).toBeVisible();
@@ -317,9 +320,10 @@ test('time limit shows the final hand and ranks surviving stacks on board and ph
   await expect(page.locator('.game-over')).toContainText('The clock ran out. Standings by chips.');
   await expect(page.getByRole('heading', { name: 'Bob and Cara tie.', exact: true })).toBeVisible();
   await expect(page.locator('.game-over li')).toHaveText(['#1Bob$600', '#1Cara$600', '#3Alice$300']);
+  await expect(page.locator('.host-panel')).toHaveCount(0);
+  await page.goto('/board');
   await expect(page.getByRole('button', { name: 'Blinds ↑', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Blinds ↓', exact: true })).toBeDisabled();
-  await page.goto('/board');
   await expect(page.locator('.game-over li')).toHaveText(['#1Bob$600', '#1Cara$600', '#3Alice$300']);
   await expect(page.getByText("Time's up · final hand", { exact: true })).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

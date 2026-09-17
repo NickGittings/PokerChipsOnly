@@ -21,7 +21,7 @@ export function App() {
     window.addEventListener('popstate', pop); document.addEventListener('click', navigate);
     return () => { window.removeEventListener('popstate', pop); document.removeEventListener('click', navigate); };
   }, []);
-  const { snapshot, connected, send, error, clearError } = useGameSocket(board);
+  const { snapshot, connected, send, error, clearError } = useGameSocket(board || setup);
   const lastTurn = useRef(false), audio = useRef<AudioContext | null>(null);
   useEffect(() => {
     const unlock = () => { try { audio.current ??= new AudioContext(); void audio.current.resume(); } catch { /* Audio is optional. */ } };
@@ -45,6 +45,6 @@ export function App() {
   return <>{showHeader && <header className="app-header"><a href="/" className="brand"><span className="brand-chip">♣</span><span>POKERCHIPS <small>ONLY</small></span></a><nav><span className={connected ? 'connection connected' : 'connection'}><i/>{connected ? 'Table connected' : 'Connecting…'}</span><a href={board ? '/' : '/board'}>{board ? 'Join table' : 'Table view'} <span>↗</span></a></nav></header>}
     {!connected && snapshot && <div className="connection-banner" role="status">Reconnecting… Your seat is saved. Actions are locked until you’re back.</div>}
     {error && <div className="error-banner" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={clearError}>×</button></div>}
-    {!props ? <main className="loading"><span className="brand-chip">♣</span><h1>Taking our seats…</h1><p>Connecting to your local table.</p></main> : setup && snapshot!.game.phase === 'lobby' ? <SetupView {...props}/> : board || setup && !seated && snapshot!.game.phase !== 'lobby' ? <BoardView {...props}/> : seated ? snapshot!.game.phase === 'lobby' ? <LobbyView {...props}/> : <PlayerView {...props}/> : <JoinView {...props}/>}
+    {!props ? <main className="loading"><span className="brand-chip">♣</span><h1>Taking our seats…</h1><p>Connecting to your local table.</p></main> : setup && snapshot!.game.phase === 'lobby' ? <SetupView {...props}/> : board || setup && snapshot!.game.phase !== 'lobby' ? <BoardView {...props}/> : seated ? snapshot!.game.phase === 'lobby' ? <LobbyView {...props}/> : <PlayerView {...props}/> : <JoinView {...props}/>}
     <footer className="app-footer"><span>REAL CARDS. DIGITAL CHIPS.</span><span>Made for your home table <span className="gold-text">♣</span></span></footer></>;
 }

@@ -62,3 +62,15 @@ export function colorUp(state: GameState) {
   if (g.players.some(p => p.stack % unit) || remaining.some(d => d.value % unit)) throw new Error('Cannot color up exactly: stacks and remaining chips must be multiples of the next chip. Make change first.');
   g.config.denominations = remaining; log(g, `Colored up ${smallest} chips without changing any stack.`); return g;
 }
+
+export function adjustDuration(state: GameState, delta: number, now: number) {
+  if (['lobby', 'tournament-over'].includes(state.phase)) throw new Error('Adjust total time only during a live tournament.');
+  if (delta !== 15 && delta !== -15) throw new Error('Add or remove exactly 15 minutes.');
+  if (state.config.durationMinutes === 0) throw new Error('Set a time limit in setup before adjusting total time.');
+  const duration = state.config.durationMinutes + delta;
+  if (duration < 5 || duration > 720) throw new Error('Total time must stay between 5 and 720 minutes.');
+  const g = structuredClone(state);
+  g.config.durationMinutes = duration;
+  log(g, `Host ${delta > 0 ? 'added' : 'removed'} 15 minutes. Total time: ${duration} minutes.`);
+  return tickClock(g, now);
+}

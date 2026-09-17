@@ -55,7 +55,7 @@ describe('authoritative multiplayer room', () => {
     expect(phone.state().joinUrls).toEqual([urls[0]]);
     const before = structuredClone(room.game), undo = structuredClone(room.undoStack);
     room.handle(phone.ws, { type: 'setJoinUrl', url: urls[1] });
-    expect(phone.error()?.message).toMatch(/host.*board/i); expect(room.joinUrl).toBe(urls[0]);
+    expect(phone.error()?.message).toMatch(/board admin/i); expect(room.joinUrl).toBe(urls[0]);
     room.handle(board.ws, { type: 'setJoinUrl', url: 'https://example.com' });
     expect(board.error()?.message).toMatch(/available join URLs/i); expect(room.joinUrl).toBe(urls[0]);
     room.handle(board.ws, { type: 'setJoinUrl', url: urls[1] });
@@ -67,7 +67,7 @@ describe('authoritative multiplayer room', () => {
   it('restores the selected join URL only while it remains a current candidate', () => {
     const directory = mkdtempSync(join(tmpdir(), 'poker-room-')); directories.push(directory);
     const file = join(directory, 'state.json'), urls = ['http://192.168.1.2:3000', 'http://10.0.0.2:3000'];
-    const room = new Room(urls, file), host = connect(room, 0);
+    const room = new Room(urls, file), host = connect(room, 0, true);
     room.handle(host.ws, { type: 'setJoinUrl', url: urls[1] });
     const saved = JSON.parse(readFileSync(file, 'utf8'));
     expect(saved).toMatchObject({ version: 2, joinUrl: urls[1] });
@@ -302,7 +302,7 @@ describe('authoritative multiplayer room', () => {
     const { room, board, phones } = table();
     const aliceId = phones[0].state().you.id, before = structuredClone(room.game);
     room.handle(phones[0].ws, { type: 'moveSeat', playerId: aliceId, seat: 5, revision: room.game.revision });
-    expect(phones[0].error()?.message).toMatch(/host.*board/i); expect(room.game).toEqual(before);
+    expect(phones[0].error()?.message).toMatch(/board admin/i); expect(room.game).toEqual(before);
     room.handle(board.ws, { type: 'moveSeat', playerId: aliceId, seat: 5, revision: room.game.revision + 1 });
     expect(board.error()?.message).toMatch(/table changed/i); expect(room.game).toEqual(before);
     for (const seat of [-1, 8, 1.5]) {
@@ -340,7 +340,7 @@ describe('authoritative multiplayer room', () => {
     room.handle(unknown.ws, null); expect(unknown.error()?.message).toMatch(/invalid/i);
     const before = structuredClone(room.game);
     room.handle(phones[0].ws, { type: 'startTournament', config: DEFAULT_CONFIG });
-    expect(phones[0].error()?.message).toMatch(/host.*board/i); expect(room.game).toEqual(before);
+    expect(phones[0].error()?.message).toMatch(/board admin/i); expect(room.game).toEqual(before);
   });
 
   it('grants dealer controls to a board even when another device became host', () => {
@@ -350,12 +350,15 @@ describe('authoritative multiplayer room', () => {
     expect(board.state().you).toMatchObject({ host: false, dealer: true }); start(room, board);
   });
 
-  it('preserves board dealer permission while navigating to setup after host failover', () => {
+  it('does not retain board permission on a player connection after host failover', () => {
     const { room, board, phones } = table();
     room.disconnect(board.ws); expect(phones[0].state().you.host).toBe(true);
     const setup = connect(room, 0, false);
-    expect(setup.state().you).toMatchObject({ host: false, dealer: true });
-    start(room, setup); expect(room.game.totalChips).toBe(1500);
+    expect(setup.state().you).toMatchObject({ host: false, dealer: false });
+    room.handle(setup.ws, { type: 'startTournament', config: DEFAULT_CONFIG });
+    expect(setup.error()?.message).toMatch(/board admin/i);
+    const boardSetup = connect(room, 0, true);
+    start(room, boardSetup); expect(room.game.totalChips).toBe(1500);
   });
 
   it('rejects out-of-turn, stale, and duplicate intents without moving chips', () => {
@@ -379,7 +382,7 @@ describe('authoritative multiplayer room', () => {
       room.handle(actor.ws, { type: 'action', action: { type: 'call' }, ...extras });
       expect(actor.error()?.message).toMatch(/table changed|revision/i); expect(room.game).toEqual(before);
     }
-    for (const type of ['dealerConfirm', 'nextHand', 'undo', 'pauseClock', 'awardPot', 'hostAdjust', 'adjustLevel', 'colorUp']) {
+    for (const type of ['dealerConfirm', 'nextHand', 'undo', 'pauseClock', 'awardPot', 'hostAdjust', 'adjustLevel', 'adjustDuration', 'colorUp']) {
       room.handle(board.ws, { type }); expect(board.error()?.message).toMatch(/table changed|revision/i); expect(room.game).toEqual(before);
     }
   });
@@ -438,7 +441,7 @@ describe('authoritative multiplayer room', () => {
     const { room, board, phones } = table(); start(room, board);
     const before = structuredClone(room.game), undoCount = room.undoStack.length;
     room.handle(phones[0].ws, { type: 'adjustLevel', delta: 1, revision: room.game.revision });
-    expect(phones[0].error()?.message).toMatch(/host.*board/i); expect(room.game).toEqual(before);
+    expect(phones[0].error()?.message).toMatch(/board admin/i); expect(room.game).toEqual(before);
     room.handle(board.ws, { type: 'adjustLevel', delta: 1, revision: room.game.revision });
     expect(room.game.pendingLevel).toBe(2); expect(room.game.level).toBe(1);
     expect(room.game.revision).toBe(before.revision + 1); expect(room.undoStack).toHaveLength(undoCount);
@@ -620,5 +623,54 @@ describe('authoritative multiplayer room', () => {
     const { room } = table(); room.game.totalChips = -1;
     writeFileSync(file, JSON.stringify({ version: 2, game: room.game, identities: room.identities, hostToken: room.hostToken }));
     expect(() => new Room('http://localhost:3000', file)).toThrow(/accounting/i);
+  });
+});
+
+
+describe('board-only administration and total time', () => {
+  it('rejects every admin intent from the first phone and after board disconnects', () => {
+    const room = new Room('http://localhost:3000', null), phone = connect(room, 1);
+    const board = connect(room, 0, true);
+    const check = () => {
+      expect(phone.state().you).toMatchObject({ host: true, dealer: false });
+      expect(phone.state().canUndo).toBe(false);
+      const before = structuredClone(room.game);
+      for (const type of ['startTournament', 'setJoinUrl', 'undo', 'pauseClock', 'adjustDuration', 'adjustLevel', 'dealerConfirm', 'awardPot', 'hostAdjust', 'colorUp', 'moveSeat', 'nextHand']) {
+        room.handle(phone.ws, { type, delta: 15, revision: room.game.revision });
+        expect(phone.error()?.message).toMatch(/board admin/i);
+        expect(room.game).toEqual(before);
+      }
+    };
+    check(); room.disconnect(board.ws); check();
+  });
+
+  it('isolates board and player connections sharing a saved device token', () => {
+    const { room, board } = table(); start(room, board);
+    const playerTab = connect(room, 0);
+    expect(playerTab.state().you.dealer).toBe(false);
+    room.handle(playerTab.ws, { type: 'undo', revision: room.game.revision });
+    expect(playerTab.error()?.message).toMatch(/board admin/i);
+    expect(board.state().you.dealer).toBe(true);
+  });
+
+  it('changes total time in 15-minute steps, preserves paused clocks and survives hand undo', () => {
+    const { room, board, phones } = table();
+    room.handle(board.ws, { type: 'startTournament', config: { ...DEFAULT_CONFIG, durationMinutes: 60 } });
+    room.handle(board.ws, { type: 'pauseClock', revision: room.game.revision });
+    act(room, phones, { type: 'fold' });
+    const before = structuredClone(room.game), history = room.undoStack.length;
+    const change = (delta: number) => room.handle(board.ws, { type: 'adjustDuration', delta, revision: room.game.revision });
+    change(15); expect(room.game.config.durationMinutes).toBe(75);
+    change(-15); expect(room.game.config.durationMinutes).toBe(60);
+    change(-15); expect(room.game.config.durationMinutes).toBe(45);
+    expect(room.game.elapsedMs).toBe(before.elapsedMs);
+    expect(room.game.clockRemainingMs).toBe(before.clockRemainingMs);
+    expect(room.undoStack).toHaveLength(history);
+    dealer(room, board, 'undo');
+    expect(room.game.config.durationMinutes).toBe(45);
+    expect(room.game.players.every(p => p.status !== 'folded')).toBe(true);
+    const current = structuredClone(room.game);
+    room.handle(board.ws, { type: 'adjustDuration', delta: 15, revision: before.revision });
+    expect(board.error()?.message).toMatch(/table changed/i); expect(room.game).toEqual(current);
   });
 });

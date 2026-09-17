@@ -9,6 +9,7 @@ export function useGameSocket(board: boolean) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null), [connected, setConnected] = useState(false), [error, setError] = useState('');
   const socket = useRef<WebSocket | null>(null);
   useEffect(() => {
+    setSnapshot(null); setConnected(false);
     let stopped = false, retries = 0, lastSnapshot = Date.now(), timeout: ReturnType<typeof setTimeout>;
     const disconnect = () => {
       const ws = socket.current; if (!ws) return;

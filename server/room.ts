@@ -7,9 +7,9 @@ import { createGame, createPlayer, startHand, startTournament } from './engine/s
 import { applyAction, legalActions } from './engine/betting';
 import { advanceStreet } from './engine/streets';
 import { awardPots } from './engine/pots';
-import { adjustLevel, adjustStack, colorUp, tickClock } from './engine/tournament';
+import { adjustDuration, adjustLevel, adjustStack, colorUp, tickClock } from './engine/tournament';
 import { assertChips, log } from './engine/helpers';
-interface Identity { id: string; name: string; board?: boolean }
+interface Identity { id: string; name: string }
 interface Peer { token: string; board: boolean }
 interface RetiredIdentity { token: string; before: string; after: string }
 interface UndoEntry { game: GameState; retired: RetiredIdentity[] }
@@ -55,8 +55,8 @@ export class Room {
     this.refreshConnections();
     for (const [ws, peer] of this.peers) {
       const identity = this.identities[peer.token];
-      const dealer = peer.board || peer.token === this.hostToken;
-      this.send(ws, { type: 'state', snapshot: { game: this.game, you: { id: identity.id, host: peer.token === this.hostToken, dealer, legal: legalActions(this.game, identity.id) }, joinUrl: this.joinUrl, joinUrls: dealer ? this.joinUrls : [this.joinUrl], canUndo: this.undoStack.length > 0, serverTime: Date.now() } });
+      const dealer = peer.board;
+      this.send(ws, { type: 'state', snapshot: { game: this.game, you: { id: identity.id, host: peer.token === this.hostToken, dealer, legal: legalActions(this.game, identity.id) }, joinUrl: this.joinUrl, joinUrls: dealer ? this.joinUrls : [this.joinUrl], canUndo: dealer && this.undoStack.length > 0, serverTime: Date.now() } });
     }
   }
   disconnect(ws: WebSocket) {
@@ -87,15 +87,14 @@ export class Room {
           if (Object.keys(this.identities).length >= 256) throw new Error('Room device limit reached.');
           this.identities[msg.token] = { id: randomUUID(), name: '' };
         }
-        if (msg.board === true) this.identities[msg.token].board = true;
-        this.peers.set(ws, { token: msg.token, board: this.identities[msg.token].board === true });
+        this.peers.set(ws, { token: msg.token, board: msg.board === true });
         if (!this.hostToken || ![...this.peers.values()].some(p => p.token === this.hostToken)) this.hostToken = msg.token;
         this.broadcast(); this.safePersist(); return;
       }
       const peer = this.peers.get(ws); if (!peer) throw new Error('Join the room first.');
-      const id = this.identities[peer.token].id, dealer = peer.board || peer.token === this.hostToken;
-      if (!['claimSeat', 'leaveSeat', 'reclaimSeat', 'lateBuyIn', 'rebuy', 'action'].includes(msg.type) && !dealer) throw new Error('Only the host or table board can do that.');
-      const needsRevision = ['action', 'dealerConfirm', 'nextHand', 'undo', 'pauseClock', 'awardPot', 'hostAdjust', 'adjustLevel', 'colorUp', 'moveSeat'].includes(msg.type);
+      const id = this.identities[peer.token].id, dealer = peer.board;
+      if (!['claimSeat', 'leaveSeat', 'reclaimSeat', 'lateBuyIn', 'rebuy', 'action'].includes(msg.type) && !dealer) throw new Error('Only the table board admin can do that.');
+      const needsRevision = ['action', 'dealerConfirm', 'nextHand', 'undo', 'pauseClock', 'awardPot', 'hostAdjust', 'adjustLevel', 'adjustDuration', 'colorUp', 'moveSeat'].includes(msg.type);
       if (needsRevision && (!('revision' in msg) || !Number.isInteger(msg.revision) || msg.revision !== this.game.revision)) throw new Error('The table changed. Review the latest state and try again.');
       if (msg.type === 'setJoinUrl') {
         if (!this.joinUrls.includes(msg.url)) throw new Error('Choose one of the available join URLs.');
@@ -145,12 +144,13 @@ export class Room {
       else if (msg.type === 'awardPot') next = awardPots(this.game, msg.potIndex, msg.winnerIds);
       else if (msg.type === 'nextHand') next = startHand(this.game);
       else if (msg.type === 'hostAdjust') next = adjustStack(this.game, msg.playerId, msg.delta);
+      else if (msg.type === 'adjustDuration') next = adjustDuration(this.game, msg.delta, Date.now());
       else if (msg.type === 'adjustLevel') next = adjustLevel(this.game, msg.delta);
       else if (msg.type === 'colorUp') next = colorUp(this.game);
       else if (msg.type === 'pauseClock') { next = tickClock(this.game, Date.now()); next.clockPaused = !next.clockPaused; log(next, next.clockPaused ? 'Clock paused.' : 'Clock resumed.'); }
       else if (msg.type === 'undo') {
         const previous = this.undoStack.at(-1)?.game; if (!previous) throw new Error('Nothing to undo.');
-        next = structuredClone(previous); next.clockRemainingMs = this.game.clockRemainingMs; next.elapsedMs = this.game.elapsedMs; next.clockUpdatedAt = Date.now(); next.pendingLevel = this.game.pendingLevel; next.clockPaused = this.game.phase === 'tournament-over' && next.phase !== 'tournament-over' ? previous.clockPaused : this.game.clockPaused;
+        next = structuredClone(previous); next.config.durationMinutes = this.game.config.durationMinutes; next.clockRemainingMs = this.game.clockRemainingMs; next.elapsedMs = this.game.elapsedMs; next.clockUpdatedAt = Date.now(); next.pendingLevel = this.game.pendingLevel; next.clockPaused = this.game.phase === 'tournament-over' && next.phase !== 'tournament-over' ? previous.clockPaused : this.game.clockPaused;
         next.logSequence = this.game.logSequence; log(next, 'Host undid the last change.');
       } else if (msg.type === 'moveSeat') {
         if (!['lobby', 'hand-complete'].includes(this.game.phase)) throw new Error('Seats can be moved only in the lobby or between hands.');
@@ -171,7 +171,7 @@ export class Room {
         for (const { token, before, after } of this.undoStack.pop()!.retired) {
           if (this.identities[token]?.id === after && !Object.values(this.identities).some(identity => identity.id === before)) this.identities[token].id = before;
         }
-      } else if (msg.type !== 'pauseClock' && msg.type !== 'adjustLevel' && !seatChurn) {
+      } else if (msg.type !== 'pauseClock' && msg.type !== 'adjustLevel' && msg.type !== 'adjustDuration' && !seatChurn) {
         const retired = displacedId ? this.retireIdentity(displacedId) : [];
         this.undoStack.push({ game: structuredClone(this.game), retired }); this.undoStack = this.undoStack.slice(-100);
       }

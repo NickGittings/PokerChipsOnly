@@ -46,7 +46,7 @@ button.allin-action:hover:not(:disabled){background:#367b50}
 .join-large .qr-well{max-width:100%}.join-large .qr-well canvas{width:260px;max-width:100%;height:auto}
 .join-url-picker{display:block;margin-top:12px;text-align:left;font-size:10px;color:var(--label)}
 .join-url-picker select{display:block;width:100%;min-width:0;min-height:36px;margin-top:5px;padding:6px;border:1px solid #ffffff24;border-radius:7px;background:var(--felt-inset);color:var(--text);font-size:11px}
-.join-corner{position:fixed;right:max(16px,env(safe-area-inset-right));bottom:max(16px,env(safe-area-inset-bottom));z-index:40;width:190px;padding:12px;border:1px solid #ffffff24;border-radius:14px;background:#153e2af5;box-shadow:0 5px 25px #0005;text-align:center}
+.join-corner{position:fixed;left:max(16px,env(safe-area-inset-left));bottom:max(16px,env(safe-area-inset-bottom));z-index:40;width:190px;padding:12px;border:1px solid #ffffff24;border-radius:14px;background:#153e2af5;box-shadow:0 5px 25px #0005;text-align:center}
 .join-corner-trigger{display:flex;flex-direction:column;align-items:center;gap:8px;width:100%;padding:0;border:0;background:none;color:var(--gold);font:inherit;font-size:11px;cursor:pointer}
 .join-corner .qr-well{padding:5px}.join-corner .qr-well canvas{width:112px;height:112px}
 .join-corner .join-url{display:block;font-size:10px;color:var(--gold);overflow-wrap:anywhere;margin-top:8px;user-select:all}

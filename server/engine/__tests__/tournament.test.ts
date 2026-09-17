@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createGame, createPlayer, startHand, startTournament } from '../state';
-import { adjustLevel, adjustStack, colorUp, colorUpSuggested, finishHand, tickClock } from '../tournament';
+import { adjustDuration, adjustLevel, adjustStack, colorUp, colorUpSuggested, finishHand, tickClock } from '../tournament';
 import { advanceStreet } from '../streets';
 import { assertChips } from '../helpers';
 import { placeOf, standings } from '../../../shared/standings';
@@ -232,5 +232,47 @@ describe('tournament lifecycle', () => {
     const high = game(); high.level = 6;
     expect(colorUpSuggested(high)).toBe(true);
     expect(colorUpSuggested(game())).toBe(false);
+  });
+});
+
+
+describe('total time adjustments', () => {
+  it('accounts for running time without resetting the blind countdown', () => {
+    const g = game(3, { durationMinutes: 60 });
+    const next = adjustDuration(g, 15, g.clockUpdatedAt + 2000);
+    expect(next.config.durationMinutes).toBe(75);
+    expect(next.elapsedMs).toBe(g.elapsedMs + 2000);
+    expect(next.clockRemainingMs).toBe(g.clockRemainingMs - 2000);
+    expect(g.config.durationMinutes).toBe(60);
+  });
+
+  it('lets the current hand finish when the shortened limit has elapsed', () => {
+    const g = game(3, { durationMinutes: 30 });
+    g.elapsedMs = 20 * 60_000;
+    const next = adjustDuration(g, -15, g.clockUpdatedAt);
+    expect(next.phase).toBe('betting');
+    finishHand(next);
+    expect(next.phase).toBe('tournament-over');
+  });
+
+  it('ends immediately between hands when the shortened limit has elapsed', () => {
+    const g = game(3, { durationMinutes: 30 });
+    finishHand(g); g.elapsedMs = 20 * 60_000;
+    expect(adjustDuration(g, -15, g.clockUpdatedAt)).toMatchObject({ phase: 'tournament-over', clockPaused: true });
+  });
+
+  it('enforces duration bounds, exact steps, and live timed games', () => {
+    const g = game(3, { durationMinutes: 20 });
+    expect(adjustDuration(g, -15, g.clockUpdatedAt).config.durationMinutes).toBe(5);
+    for (const delta of [0, 1, -1, 30, NaN, Infinity]) expect(() => adjustDuration(g, delta, g.clockUpdatedAt)).toThrow(/15 minutes/);
+    for (const [durationMinutes, delta] of [[0, 15], [15, -15], [720, 15]]) {
+      g.config.durationMinutes = durationMinutes;
+      expect(() => adjustDuration(g, delta, g.clockUpdatedAt)).toThrow();
+    }
+    g.config.durationMinutes = 60;
+    for (const phase of ['lobby', 'tournament-over'] as const) {
+      g.phase = phase;
+      expect(() => adjustDuration(g, 15, g.clockUpdatedAt)).toThrow(/live tournament/);
+    }
   });
 });
