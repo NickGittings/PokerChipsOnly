@@ -1,9 +1,11 @@
-import { useEffect } from 'react';
+import { useContext, useEffect } from 'react';
+import { AlertHostContext } from './AlertHostContext';
 import { money } from '../../shared/chips';
 import type { Celebration } from '../net/useWinCelebration';
 import { useDialogFocus } from './useDialogFocus';
 
 export function WinCelebration({ celebration, dismiss }: { celebration: Celebration | null; dismiss: () => void }) {
+  const alertHost = useContext(AlertHostContext);
   const dialogRef = useDialogFocus(!!celebration);
   useEffect(() => {
     if (!celebration) return;
@@ -18,5 +20,6 @@ export function WinCelebration({ celebration, dismiss }: { celebration: Celebrat
       <strong id="win-title">You won {money(celebration.amount)}!</strong>
       <button type="button" className="game-button" onClick={event => { event.stopPropagation(); dismiss(); }}>Dismiss celebration</button>
     </div>
+    <div className="celebration-alerts" ref={alertHost} />
   </div>;
 }

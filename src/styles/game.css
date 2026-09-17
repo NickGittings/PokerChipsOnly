@@ -79,7 +79,7 @@ button.allin-action:hover:not(:disabled){background:#367b50}
 .player-flow>*{flex-shrink:0}
 .player-actions{flex-shrink:0;margin-inline:-18px;padding:8px 18px max(10px,env(safe-area-inset-bottom));background:var(--felt-deep)}
 .player-shell + .app-footer{display:none}
-body:has(.player-shell) .connection-banner,body:has(.player-shell) .error-banner{position:fixed;top:max(8px,env(safe-area-inset-top));left:12px;right:12px;margin:0;z-index:125}
+body:has(.player-shell) .connection-banner,body:has(.player-shell) .error-banner{position:fixed;top:max(8px,env(safe-area-inset-top));left:12px;right:12px;margin:0;z-index:150}
 .player-header{gap:8px;flex-wrap:wrap}
 .player-header .brand-link{min-height:26px;font-size:23px;gap:6px}
 .player-header .brand-link>span{font-size:9px;letter-spacing:.1em}
@@ -152,3 +152,5 @@ body:has(.player-shell) .connection-banner,body:has(.player-shell) .error-banner
 .win-celebration-card strong{font-size:28px;color:var(--gold);font-weight:600;line-height:1.25}
 @keyframes win-fade{from{opacity:0}to{opacity:1}}
 @keyframes win-pop{from{opacity:0;transform:scale(.85) translateY(8px)}to{opacity:1;transform:scale(1) translateY(0)}}
+
+.celebration-alerts{position:absolute;inset:0;pointer-events:none}.celebration-alerts .connection-banner,.celebration-alerts .error-banner{pointer-events:auto}

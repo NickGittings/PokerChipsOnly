@@ -941,6 +941,7 @@ async function celebrationTable(page: Page, dealing = false, amounts = [100, 40]
   return {
     game, snapshot, messages,
     disconnect: () => socket.close(),
+    error: (message: string) => socket.send(JSON.stringify({ type: 'error', message })),
     publish: async () => {
       game.config.name = `Update ${++update}`;
       socket.send(JSON.stringify({ type: 'state', snapshot }));
@@ -998,9 +999,16 @@ for (const dealing of [true, false]) test(`celebration waits for all pots on the
   const dismiss = celebration.getByRole('button', { name: 'Dismiss celebration' });
   await expect(page.getByRole('dialog')).toHaveCount(1);
   await expect(dismiss).toBeFocused();
+  const controls = celebration.getByRole('button');
+  for (let index = 1; index < await controls.count(); index++) {
+    await page.keyboard.press('Tab');
+    await expect(controls.nth(index)).toBeFocused();
+  }
   await page.keyboard.press('Tab');
   await expect(dismiss).toBeFocused();
   await page.keyboard.press('Shift+Tab');
+  await expect(controls.last()).toBeFocused();
+  await page.keyboard.press('Tab');
   await expect(dismiss).toBeFocused();
   await page.clock.runFor(3400);
   await expect(celebration).toBeVisible();
@@ -1066,4 +1074,80 @@ test('celebration resets a failed image on replacement, restores focus, and expi
   await expect(page.locator('.connection-indicator')).toHaveText('Live');
   await publish();
   await expect(celebration).toHaveCount(0);
+});
+
+for (const phase of ['hand-complete', 'tournament-over'] as const) test(`alerts remain above the celebration and accessible in ${phase}`, async ({ page }) => {
+  const { game, publish, error } = await celebrationTable(page, false, [100]);
+  game.phase = phase;
+  game.pots[0].awarded = true; game.pots[0].winnerIds = ['alice'];
+  game.players[0].stack = 600;
+  game.players[1].stack = 0; game.players[1].status = 'busted'; game.players[1].bustOrder = 1;
+  await publish();
+  const celebration = page.getByRole('dialog', { name: 'You won $100!' });
+  const dismiss = celebration.getByRole('button', { name: 'Dismiss celebration' });
+  const toast = celebration.locator('.notice-bust');
+  await expect(celebration).toBeVisible();
+  await expect(toast).toContainText('Bob busted · finished #2');
+  // Visibility alone does not detect a toast hidden behind the backdrop.
+  await expect.poll(() => toast.evaluate(el => {
+    const box = el.getBoundingClientRect();
+    return el.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+  })).toBe(true);
+  await page.keyboard.press('Tab');
+  await expect(toast.getByRole('button')).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(toast).toHaveCount(0);
+  await expect(dismiss).toBeFocused();
+  await expect(celebration).toBeVisible();
+
+  error('Test table error');
+  const banner = celebration.getByRole('alert');
+  await expect(banner).toContainText('Test table error');
+  await expect.poll(() => banner.evaluate(el => {
+    const box = el.getBoundingClientRect();
+    return el.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+  })).toBe(true);
+  await page.keyboard.press('Tab');
+  await expect(banner.getByRole('button')).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(dismiss).toBeFocused();
+  await banner.getByRole('button').click();
+  await expect(banner).toHaveCount(0);
+  await expect(celebration).toBeVisible();
+
+  // Alerts return to the app when the celebration closes.
+  error('Error survives celebration dismissal');
+  await expect(banner).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(celebration).toHaveCount(0);
+  await expect(page.getByRole('alert')).toContainText('Error survives celebration dismissal');
+  await page.getByRole('button', { name: 'Dismiss error' }).click();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+for (const rollback of ['removed pot', 'unawarded pot', 'different winner'] as const) test(`undo dismisses an active uncontested celebration after ${rollback}`, async ({ page }) => {
+  const { game, publish } = await celebrationTable(page, false, []);
+  game.phase = 'betting';
+  await publish();
+  game.phase = 'hand-complete';
+  game.pots = [{ amount: 100, eligibleIds: ['alice'], awarded: true, winnerIds: ['alice'] }];
+  await publish();
+  const celebration = page.locator('.win-celebration');
+  await expect(celebration).toContainText('You won $100!');
+  game.phase = 'betting';
+  if (rollback === 'removed pot') game.pots = [];
+  else if (rollback === 'unawarded pot') game.pots[0].awarded = false;
+  else game.pots[0].winnerIds = ['bob'];
+  await publish();
+  await expect(page.locator('.dealer-overlay')).toHaveCount(0);
+  await expect(celebration).toHaveCount(0);
+  await publish();
+  await expect(celebration).toHaveCount(0);
+  // A fresh award after the rollback can still celebrate.
+  game.pots = [];
+  await publish();
+  game.phase = 'hand-complete';
+  game.pots = [{ amount: 100, eligibleIds: ['alice'], awarded: true, winnerIds: ['alice'] }];
+  await publish();
+  await expect(celebration).toContainText('You won $100!');
 });

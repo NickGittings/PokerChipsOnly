@@ -13,9 +13,10 @@ export function useWinCelebration(snapshot: Snapshot | null, connected: boolean,
   const [celebration, setCelebration] = useState<Celebration | null>(null);
   const previous = useRef<Snapshot | null>(null), sequence = useRef(0);
   const pending = useRef(new Set<number>());
+  const displayed = useRef(new Set<number>());
   const lastImage = useRef<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>();
-  const dismiss = useCallback(() => { clearTimeout(timer.current); setCelebration(null); }, []);
+  const dismiss = useCallback(() => { clearTimeout(timer.current); displayed.current.clear(); setCelebration(null); }, []);
   useEffect(() => () => clearTimeout(timer.current), []);
   useEffect(() => {
     if (!snapshot || !connected) {
@@ -29,6 +30,11 @@ export function useWinCelebration(snapshot: Snapshot | null, connected: boolean,
     if (!sameContext) { pending.current.clear(); dismiss(); }
     const wins = potWinsFor(sameContext ? before.game : null, snapshot.game, snapshot.you.id);
     previous.current = snapshot;
+    // An undo can revoke a visible award without opening a dealer dialog.
+    for (const index of displayed.current) {
+      const pot = snapshot.game.pots[index];
+      if (!pot?.awarded || !pot.winnerIds?.includes(snapshot.you.id)) { dismiss(); break; }
+    }
     // Undo must remove a queued award before it can be celebrated.
     for (const index of pending.current) {
       const pot = snapshot.game.pots[index];
@@ -41,13 +47,14 @@ export function useWinCelebration(snapshot: Snapshot | null, connected: boolean,
       const pot = snapshot.game.pots[index];
       return total + (potShares(snapshot.game, pot, pot.winnerIds ?? []).find(({ player }) => player.id === snapshot.you.id)?.amount ?? 0);
     }, 0);
+    displayed.current = new Set(pending.current);
     pending.current.clear();
     clearTimeout(timer.current);
     const choices = images.length > 1 ? images.filter(src => src !== lastImage.current) : images;
     const src = choices.length ? choices[Math.floor(Math.random() * choices.length)] : null;
     lastImage.current = src;
     setCelebration({ id: ++sequence.current, src, amount });
-    timer.current = setTimeout(() => setCelebration(null), 10000);
+    timer.current = setTimeout(dismiss, 10000);
     try { navigator.vibrate?.([80, 50, 80]); } catch { /* Vibration is optional. */ }
   }, [snapshot, connected, hold, dismiss]);
   return { celebration: connected && !hold ? celebration : null, dismiss };

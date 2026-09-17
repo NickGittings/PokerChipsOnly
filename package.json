@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n server,client \"env CLIENT_PORT=5173 tsx watch server/index.ts\" \"vite --host 0.0.0.0\"",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc -b && vite build",
     "start": "npm run build && tsx server/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",

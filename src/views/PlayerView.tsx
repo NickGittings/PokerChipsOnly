@@ -5,7 +5,7 @@ import { levelNotice } from '../../shared/blinds';
 import { ChipStack } from '../components/Chips';
 import { BlindTimer } from '../components/BlindTimer';
 import { ActionBar } from '../components/ActionBar';
-import { GameOver, ShowdownModal, StreetModal } from '../components/GameModals';
+import { GameOver, ShowdownModal, StreetModal, showdownModalOpen, streetModalOpen } from '../components/GameModals';
 import { WinCelebration } from '../components/WinCelebration';
 import { HandLog, TableRoster, SeatMarkers, blindClass } from '../components/PokerTable';
 import { useWinCelebration } from '../net/useWinCelebration';
@@ -14,7 +14,7 @@ import '../styles/game.css';
 type Props = { snapshot: Snapshot; send: (msg: ClientMsg) => void; connected: boolean };
 export function PlayerView({ snapshot, send, connected }: Props) {
   const { game, you } = snapshot;
-  const dialogOpen = game.awaitingDeal || game.phase === 'street-break' || (game.phase === 'showdown' && game.pots.some(pot => !pot.awarded));
+  const dialogOpen = streetModalOpen(game) || showdownModalOpen(game);
   const { celebration, dismiss } = useWinCelebration(snapshot, connected, dialogOpen);
   const player = game.players.find(p => p.id === you.id);
   if (!player) return <main className="player-page"><section className="game-panel"><h1>Find your place at the table.</h1><p>Choose a seat to join this game.</p><a className="game-button primary" href="/">Choose a seat →</a></section></main>;

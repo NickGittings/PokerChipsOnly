@@ -19,7 +19,13 @@ export function useDialogFocus(open: boolean) {
       else if (!event.shiftKey && (document.activeElement === last || document.activeElement === dialog)) { event.preventDefault(); first.focus(); }
     };
     dialog.addEventListener('keydown', trap);
+    // Dismissing or expiring an alert can remove the currently focused button.
+    const observer = new MutationObserver(() => {
+      if (dialog.isConnected && document.activeElement === document.body) (targets()[0] ?? dialog).focus();
+    });
+    observer.observe(dialog, { childList: true, subtree: true });
     return () => {
+      observer.disconnect();
       dialog.removeEventListener('keydown', trap);
       // A newly opened dialog owns focus; dismissing this one must not steal it back.
       const focusedDialog = document.activeElement?.closest('[role="dialog"][aria-modal="true"]');
