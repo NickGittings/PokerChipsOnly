@@ -1,5 +1,6 @@
 import type { GameState, Player, Pot } from '../../shared/types';
-import { chipUnit, money } from '../../shared/chips';
+import { money } from '../../shared/chips';
+import { potShares } from '../../shared/potShares';
 import { finishHand } from './tournament';
 import { log } from './helpers';
 export function buildPots(players: Player[]): Pot[] {
@@ -31,11 +32,10 @@ export function awardPots(state: GameState, potIndex: number, winnerIds: string[
   const g = structuredClone(state), pot = g.pots[potIndex];
   if (g.phase !== 'showdown' || !pot || pot.awarded || potIndex !== g.pots.findIndex(p => !p.awarded)) throw new Error('Award the next unclaimed pot.');
   if (!Array.isArray(winnerIds) || !winnerIds.length || new Set(winnerIds).size !== winnerIds.length || winnerIds.some(id => !pot.eligibleIds.includes(id))) throw new Error('Select one or more eligible winners.');
-  const winners = g.players.filter(p => winnerIds.includes(p.id)).sort((a, b) => ((a.seat - g.button + 7) % 8) - ((b.seat - g.button + 7) % 8));
-  const unit = chipUnit(g.config.denominations), units = pot.amount / unit, share = Math.floor(units / winners.length), extra = units % winners.length;
-  winners.forEach((p, i) => { p.stack += (share + (i < extra ? 1 : 0)) * unit; });
+  const shares = potShares(g, pot, winnerIds);
+  shares.forEach(({ player, amount }) => { player.stack += amount; });
   pot.awarded = true; pot.winnerIds = winnerIds;
-  log(g, `${potIndex === 0 ? 'Main pot' : `Side pot ${potIndex}`} ${money(pot.amount)} → ${winners.map(p => p.name).join(' + ')}.`);
+  log(g, `${potIndex === 0 ? 'Main pot' : `Side pot ${potIndex}`} ${money(pot.amount)} → ${shares.map(({ player }) => player.name).join(' + ')}.`);
   if (g.pots.every(p => p.awarded)) finishHand(g);
   return g;
 }

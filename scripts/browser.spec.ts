@@ -1,4 +1,4 @@
-import { expect, test, type Browser, type Page } from '@playwright/test';
+import { expect, test, type Browser, type Page, type WebSocketRoute } from '@playwright/test';
 import type { Snapshot } from '../shared/types';
 import { createGame, createPlayer, startTournament } from '../server/engine/state';
 import { legalActions } from '../server/engine/betting';
@@ -808,6 +808,7 @@ test('winning a pot shows a full-screen celebration only to the winner, ignores 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
   const celebration = page.locator('.win-celebration');
+  await expect(page.locator('.player-header')).toContainText('Hand 1');
   await expect(celebration).toHaveCount(0);
 
   // Award the pot to Alice.
@@ -844,9 +845,20 @@ test('winning a pot shows a full-screen celebration only to the winner, ignores 
   game.pots = [{ amount: 25, eligibleIds: ['alice', 'bob'], awarded: false }];
   snapshot.you = { id: 'bob', host: false, admin: false, dealing: false, legal: null };
   await page.goto('/'); // Fresh load establishes bob's baseline at the unawarded pot.
+  await expect(page.locator('.player-header')).toContainText('Hand 2');
   game.pots[0] = { ...game.pots[0], awarded: true, winnerIds: ['alice'] };
+  game.players[1].stack = 475;
   publish();
+  await expect(page.locator('.your-stack-balance strong')).toHaveText('$475');
   await expect(celebration).toHaveCount(0);
+
+  // A new award edge for the same viewer proves the socket and detector are active.
+  game.pots[0] = { ...game.pots[0], awarded: false, winnerIds: undefined };
+  publish();
+  await expect(page.locator('.dealer-overlay')).toBeVisible();
+  game.pots[0] = { ...game.pots[0], awarded: true, winnerIds: ['bob'] };
+  publish();
+  await expect(celebration).toContainText('You won $25');
 });
 
 test('an uncontested win (pots array replaced wholesale) and a split pot both trigger the celebration correctly', async ({ page }) => {
@@ -872,7 +884,7 @@ test('an uncontested win (pots array replaced wholesale) and a split pot both tr
   await expect(celebration).toContainText('You won $35');
   await celebration.click();
 
-  // A split pot reports every winner's share of the celebration text.
+  // A split pot reports the chips this winner actually receives.
   game.hand = 2;
   game.pots = [{ amount: 40, eligibleIds: ['bob', 'cara'], awarded: false }];
   publish();
@@ -880,7 +892,7 @@ test('an uncontested win (pots array replaced wholesale) and a split pot both tr
   await expect(celebration).toHaveCount(0);
   game.pots[0] = { ...game.pots[0], awarded: true, winnerIds: ['bob', 'cara'] };
   publish();
-  await expect(celebration).toContainText('You won $40 · split 2 ways');
+  await expect(celebration).toContainText('You won $20!');
 });
 
 test('winning the final pot of the tournament still shows the celebration on the game-over screen', async ({ page }) => {
@@ -902,4 +914,156 @@ test('winning the final pot of the tournament still shows the celebration on the
   game.players[0].stack = 1040;
   publish();
   await expect(page.locator('.win-celebration')).toContainText('You won $40');
+});
+
+async function celebrationTable(page: Page, dealing = false, amounts = [100, 40]) {
+  const game = createGame();
+  game.phase = 'showdown'; game.hand = 1; game.button = 0;
+  game.config.denominations = [{ value: 5, color: '#fff' }];
+  game.players = [createPlayer('alice', 'Alice', 0, 500), createPlayer('bob', 'Bob', 1, 500)];
+  game.pots = amounts.map(amount => ({ amount, eligibleIds: ['alice', 'bob'], awarded: false }));
+  const snapshot: Snapshot = {
+    game, you: { id: 'alice', host: false, admin: false, dealing, legal: null },
+    joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: true, serverTime: Date.now(),
+  };
+  let socket: WebSocketRoute;
+  const messages: { type: string; potIndex?: number }[] = [];
+  await page.routeWebSocket('**/ws', ws => {
+    socket = ws;
+    ws.onMessage(message => {
+      messages.push(JSON.parse(String(message)));
+      ws.send(JSON.stringify({ type: 'state', snapshot }));
+    });
+  });
+  await page.goto('/');
+  await expect(page.locator('.player-header')).toContainText('Hand 1');
+  let update = 0;
+  return {
+    game, snapshot, messages,
+    disconnect: () => socket.close(),
+    publish: async () => {
+      game.config.name = `Update ${++update}`;
+      socket.send(JSON.stringify({ type: 'state', snapshot }));
+      // A positive render assertion ensures absence checks observe this update.
+      await expect(page.locator('.player-header-name')).toHaveText(game.config.name);
+    },
+  };
+}
+
+test('celebration suppresses reconnect awards and still celebrates the next live win', async ({ page }) => {
+  const { game, disconnect, publish } = await celebrationTable(page, false, [100]);
+  await disconnect();
+  await expect(page.locator('.connection-indicator')).toHaveText('Offline');
+  game.pots[0].awarded = true; game.pots[0].winnerIds = ['alice'];
+  await expect(page.locator('.connection-indicator')).toHaveText('Live');
+  await expect(page.locator('.dealer-overlay')).toHaveCount(0);
+  await expect(page.locator('.win-celebration')).toHaveCount(0);
+  game.hand++;
+  game.pots[0].awarded = false;
+  await publish();
+  game.pots[0].awarded = true;
+  await publish();
+  await expect(page.locator('.win-celebration')).toContainText('You won $100!');
+});
+
+for (const split of [false, true]) test(`celebration aggregates simultaneous pots with correct ${split ? 'mixed split and odd-chip' : 'sole-winner'} payouts`, async ({ page }) => {
+  const { game, publish } = await celebrationTable(page, false, [split ? 105 : 100, 40]);
+  game.pots[0].awarded = true; game.pots[0].winnerIds = split ? ['alice', 'bob'] : ['alice'];
+  game.pots[1].awarded = true; game.pots[1].winnerIds = ['alice'];
+  await publish();
+  // Bob is left of the button and receives the odd $5 chip: Alice gets $50 + $40.
+  await expect(page.locator('.win-celebration strong')).toHaveText(`You won $${split ? 90 : 140}!`);
+});
+
+for (const dealing of [true, false]) test(`celebration waits for all pots on the ${dealing ? 'dealer' : 'waiting player'} screen and traps keyboard focus`, async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-01-01T00:00:00') });
+  await page.clock.pauseAt(new Date('2026-01-01T00:00:01'));
+  const { game, messages, publish } = await celebrationTable(page, dealing);
+  game.pots[0].awarded = true; game.pots[0].winnerIds = ['alice'];
+  await publish();
+  const dealer = page.locator('.dealer-overlay');
+  await expect(dealer).toContainText('Side pot 1');
+  await expect(page.locator('.win-celebration')).toHaveCount(0);
+  if (dealing) {
+    await dealer.getByRole('button', { name: 'Select winner Alice' }).click();
+    await dealer.getByRole('button', { name: /Award pot/ }).click();
+    await expect.poll(() => messages.filter(message => message.type === 'awardPot')).toEqual([{ type: 'awardPot', potIndex: 1, winnerIds: ['alice'], revision: 0 }]);
+  }
+  // Wait longer than the display duration, with the usual socket heartbeats.
+  for (let i = 0; i < 4; i++) { await page.clock.runFor(3000); await publish(); }
+  game.pots[1].awarded = true; game.pots[1].winnerIds = ['alice'];
+  game.phase = 'hand-complete';
+  await publish();
+  const celebration = page.getByRole('dialog', { name: 'You won $140!' });
+  const dismiss = celebration.getByRole('button', { name: 'Dismiss celebration' });
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  await expect(dismiss).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(dismiss).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(dismiss).toBeFocused();
+  await page.clock.runFor(3400);
+  await expect(celebration).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(celebration).toHaveCount(0);
+  await publish();
+  await expect(celebration).toHaveCount(0);
+});
+
+for (const reset of ['undo', 'new hand', 'disconnect'] as const) test(`celebration drops pending wins after ${reset}`, async ({ page }) => {
+  const { game, publish, disconnect } = await celebrationTable(page);
+  game.pots[0].awarded = true; game.pots[0].winnerIds = ['alice'];
+  await publish();
+  await expect(page.locator('.win-celebration')).toHaveCount(0);
+  if (reset === 'disconnect') {
+    await disconnect();
+    await expect(page.locator('.connection-indicator')).toHaveText('Offline');
+    await expect(page.locator('.connection-indicator')).toHaveText('Live');
+  } else {
+    if (reset === 'new hand') game.hand++;
+    game.pots[0].awarded = false;
+    await publish();
+    game.pots[0].awarded = true; game.pots[0].winnerIds = ['bob'];
+  }
+  game.pots[1].awarded = true; game.pots[1].winnerIds = ['bob'];
+  await publish();
+  await expect(page.locator('.dealer-overlay')).toHaveCount(0);
+  await expect(page.locator('.win-celebration')).toHaveCount(0);
+});
+
+test('celebration resets a failed image on replacement, restores focus, and expires without replaying', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-01-01T00:00:00') });
+  await page.clock.pauseAt(new Date('2026-01-01T00:00:01'));
+  const { game, publish } = await celebrationTable(page, true, [100]);
+  game.phase = 'hand-complete';
+  await publish();
+  const nextHand = page.getByRole('button', { name: 'Deal next hand' });
+  await nextHand.focus();
+  game.pots[0].awarded = true; game.pots[0].winnerIds = ['alice'];
+  await publish();
+  const celebration = page.locator('.win-celebration');
+  await celebration.locator('img').evaluate(img => img.dispatchEvent(new Event('error')));
+  await expect(celebration.locator('img')).toBeHidden();
+  game.pots[0].awarded = false;
+  await publish();
+  game.pots[0].awarded = true;
+  await publish();
+  await expect(celebration.locator('img')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(celebration).toHaveCount(0);
+  await expect(nextHand).toBeFocused();
+  game.pots[0].awarded = false;
+  await publish();
+  game.pots[0].awarded = true;
+  await publish();
+  for (let i = 0; i < 3; i++) {
+    await page.clock.runFor(3000);
+    await publish();
+    await expect(celebration).toBeVisible();
+  }
+  await page.clock.runFor(1100);
+  await expect(celebration).toHaveCount(0);
+  await expect(page.locator('.connection-indicator')).toHaveText('Live');
+  await publish();
+  await expect(celebration).toHaveCount(0);
 });
