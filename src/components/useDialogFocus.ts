@@ -19,7 +19,12 @@ export function useDialogFocus(open: boolean) {
       else if (!event.shiftKey && (document.activeElement === last || document.activeElement === dialog)) { event.preventDefault(); first.focus(); }
     };
     dialog.addEventListener('keydown', trap);
-    return () => { dialog.removeEventListener('keydown', trap); if (previous?.isConnected) previous.focus(); };
+    return () => {
+      dialog.removeEventListener('keydown', trap);
+      // A newly opened dialog owns focus; dismissing this one must not steal it back.
+      const focusedDialog = document.activeElement?.closest('[role="dialog"][aria-modal="true"]');
+      if (previous?.isConnected && (!focusedDialog || focusedDialog === dialog)) previous.focus();
+    };
   }, [open]);
   return ref;
 }

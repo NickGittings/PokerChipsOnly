@@ -26,7 +26,7 @@ export function PlayerView({ snapshot, send, connected }: Props) {
       <div className="player-topbar">
         <PlayerHeader game={game} connected={connected} />
         <div className="player-pot-row"><div><span className="eyebrow">{game.street} · total pot</span><strong>{money(pot)}</strong><ChipStack amount={pot} denominations={game.config.denominations} />{game.pots.length > 1 && <div className="side-pot-tags">{game.pots.map((p, i) => <span key={i}>{i === 0 ? 'Main' : `Side ${i}`} {money(p.amount)}{p.awarded ? ' ✓' : ''}</span>)}</div>}</div><BlindTimer game={game} /></div>
-        <div className="player-context"><section className={`game-panel your-stack ${blindClass(game, player.seat)} ${game.actorId === player.id ? 'seat-acting' : ''}`}><div className="panel-heading"><span className="eyebrow">{player.name} · Seat {player.seat + 1}</span><SeatMarkers game={game} seat={player.seat} /></div><div className="your-stack-balance"><span className="your-stack-label"><span className="balance-chip" aria-hidden="true">♣</span>Your chips</span><strong>{money(player.stack)}</strong></div><div className="your-stack-footer"><span>In this hand <b>{money(player.committedThisHand)}</b></span><span>{player.status === 'busted' ? `Finished #${placeOf(game, player) ?? '—'}` : player.status.replace('-', ' ')}</span></div>{player.status === 'busted' && game.phase === 'hand-complete' && <button type="button" className="game-button primary wide" disabled={!connected} onClick={() => send({ type: 'rebuy' })}>Buy back in for {money(game.config.startingStack)}</button>}</section></div>
+        <div className="player-context"><section className={`game-panel your-stack ${blindClass(game, player.seat)} ${game.actorId === player.id ? 'seat-acting' : ''}`}><div className="panel-heading"><span className="eyebrow">{player.name} · Seat {player.seat + 1}</span><SeatMarkers game={game} seat={player.seat} /></div><div className="your-stack-balance"><span className="your-stack-label"><span className="balance-chip" aria-hidden="true">♣</span>Your chips</span><strong>{money(player.stack)}</strong></div><div className="your-stack-footer"><span>In this hand <b>{money(player.committedThisHand)}</b></span><span>{player.status === 'busted' ? `Finished #${placeOf(game, player) ?? '—'}` : player.status.replace('-', ' ')}</span></div></section></div>
       </div>
       <div className="player-flow">
         {notice && <div className="level-notice">{notice}</div>}
@@ -34,6 +34,7 @@ export function PlayerView({ snapshot, send, connected }: Props) {
         <HandLog game={game} compact />
       </div>
       <div className="player-actions">
+        {player.status === 'busted' && game.phase === 'hand-complete' && <button type="button" className="game-button primary wide" disabled={!connected} onClick={() => send({ type: 'rebuy' })}>Buy back in for {money(game.config.startingStack)}</button>}
         {you.dealing && game.phase === 'hand-complete' && <button type="button" className="game-button primary wide" disabled={!connected} onClick={() => send({ type: 'nextHand', revision: game.revision })}>Deal next hand →</button>}
         <ActionBar snapshot={snapshot} send={send} connected={connected} />
       </div>

@@ -13,9 +13,9 @@ export function SeatMarkers({ game, seat }: { game: GameState; seat: number }) {
   return <span className="seat-markers">{game.button === seat && <i className="m-d" title="Dealer button">D</i>}{game.smallBlindSeat === seat && <i className="m-sb" title="Small blind">SB</i>}{game.bigBlindSeat === seat && <i className="m-bb" title="Big blind">BB</i>}</span>;
 }
 
-export function seatStatus(game: GameState, player: Player): string {
+export function seatStatus(game: GameState, player: Player, showBet = false): string {
   const place = placeOf(game, player);
-  return !player.connected ? 'Reconnecting…' : game.actorId === player.id ? 'Your action' : place ? `Finished #${place}` : player.status === 'folded' ? 'folded' : player.committedThisStreet > 0 ? `In front ${money(player.committedThisStreet)}` : player.status === 'active' ? 'In the hand' : player.status.replace('-', ' ');
+  return !player.connected ? 'Reconnecting…' : game.actorId === player.id ? 'Your action' : place ? `Finished #${place}` : player.status === 'folded' ? 'folded' : player.status === 'all-in' ? 'all in' : showBet && player.committedThisStreet > 0 ? `In front ${money(player.committedThisStreet)}` : player.status === 'active' ? 'In the hand' : player.status.replace('-', ' ');
 }
 
 export function SeatBadge({ player, game }: { player?: Player; game: GameState }) {
@@ -38,7 +38,7 @@ export function TableRoster({ game }: { game: GameState }) {
     const acting = game.actorId === p.id;
     return <div ref={acting ? actorRef : undefined} key={p.id} className={`roster-seat ${blindClass(game, p.seat)} ${acting ? 'acting' : ''} ${p.status === 'folded' || p.status === 'busted' ? 'muted' : ''} ${!p.connected ? 'offline' : ''}`}>
       <span className="roster-avatar">{p.name.slice(0, 1).toUpperCase()}</span>
-      <div className="roster-info"><small>{p.name}</small><span className="roster-state">{seatStatus(game, p)}</span></div>
+      <div className="roster-info"><small>{p.name}</small><span className="roster-state">{seatStatus(game, p, true)}</span></div>
       <SeatMarkers game={game} seat={p.seat} />
       <b className="roster-stack">{money(p.stack)}</b>
     </div>;
@@ -61,7 +61,10 @@ export function PokerTable({ game, compact = false, onMoveSeat }: { game: GameSt
 
 export function HandLog({ game, compact = false }: { game: GameState; compact?: boolean }) {
   const [expanded, setExpanded] = useState(false);
-  const dialogRef = useDialogFocus(expanded);
+  const blocking = game.awaitingDeal || game.phase === 'street-break' || (game.phase === 'showdown' && game.pots.some(pot => !pot.awarded));
+  const open = expanded && !blocking;
+  const dialogRef = useDialogFocus(open);
+  useEffect(() => { setExpanded(false); }, [game.revision, blocking]);
   const entries = (count: number) => <ol>{game.log.slice(-count).reverse().map(entry => <li key={entry.id}>{entry.text}</li>)}</ol>;
   const empty = !game.log.length && <p className="muted">The story starts with the first hand.</p>;
   return <>
@@ -69,7 +72,7 @@ export function HandLog({ game, compact = false }: { game: GameState; compact?: 
       <div className="panel-heading"><span className="eyebrow">Table activity</span><span>Hand {game.hand}</span>{compact && <button type="button" className="activity-expand" aria-label="Expand table activity" aria-haspopup="dialog" onClick={() => setExpanded(true)}>▸</button>}</div>
       {entries(compact ? 2 : 12)}{empty}
     </section>
-    {compact && expanded && <div className="game-overlay activity-overlay" ref={dialogRef} tabIndex={-1} onKeyDown={e => { if (e.key === 'Escape') setExpanded(false); }} role="dialog" aria-modal="true" aria-labelledby="activity-title">
+    {compact && open && <div className="game-overlay activity-overlay" ref={dialogRef} tabIndex={-1} onKeyDown={e => { if (e.key === 'Escape') setExpanded(false); }} role="dialog" aria-modal="true" aria-labelledby="activity-title">
       <section className="street-modal activity-sheet">
         <div className="panel-heading"><h2 id="activity-title">Table activity</h2><span>Hand {game.hand}</span></div>
         <div className="hand-log">{entries(12)}{empty}</div>

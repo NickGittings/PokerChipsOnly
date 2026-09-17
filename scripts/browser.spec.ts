@@ -666,5 +666,116 @@ for (const verb of ['Raise', 'Bet']) test(`${verb} and activity sheets trap focu
   await close.click();
   await expect(dialog).toHaveCount(0);
   await expect(activity).toBeFocused();
+  await activity.click();
+  game.revision++;
+  publish();
+  await expect(dialog).toHaveCount(0);
+  await expect(activity).toBeFocused();
   expect(await page.evaluate(() => window.scrollY)).toBe(0);
+});
+
+for (const phase of ['street-break', 'showdown'] as const) for (const sheet of ['activity', 'sizer', 'all-in'] as const) test(`${sheet} yields focus to the ${phase} dealer dialog`, async ({ page }) => {
+  const lobby = createGame();
+  lobby.players = [createPlayer('alice', 'Alice', 0), createPlayer('bob', 'Bob', 1), createPlayer('cara', 'Cara', 2)];
+  const game = startTournament(lobby, lobby.config);
+  game.awaitingDeal = false;
+  const snapshot: Snapshot = {
+    game, you: { id: game.actorId!, host: false, admin: false, dealing: true, legal: legalActions(game, game.actorId!) },
+    joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now(),
+  };
+  let publish = () => {};
+  await page.routeWebSocket('**/ws', socket => {
+    publish = () => socket.send(JSON.stringify({ type: 'state', snapshot }));
+    socket.onMessage(publish);
+  });
+  await page.setViewportSize({ width: 390, height: 667 });
+  await page.goto('/');
+  await page.getByRole('button', { name: sheet === 'activity' ? 'Expand table activity' : sheet === 'sizer' ? 'Open Raise sizer' : 'All in', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  game.phase = phase;
+  game.pendingStreet = 'flop';
+  game.actorId = null;
+  game.pots = [{ amount: 15, eligibleIds: game.players.map(player => player.id), awarded: false }];
+  game.revision++;
+  snapshot.you.legal = null;
+  publish();
+  const dealer = page.locator('.dealer-overlay');
+  await expect(page.locator('.activity-overlay,.sizer-overlay,.confirm-overlay')).toHaveCount(0);
+  await expect(dealer.getByRole('heading')).toContainText(phase === 'street-break' ? /Deal the\s*flop/ : 'Main pot');
+  const first = dealer.getByRole('button', { name: phase === 'street-break' ? /Cards dealt/ : 'Select winner Alice' });
+  await expect(first).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(dealer.getByRole('button', { name: phase === 'street-break' ? /Cards dealt/ : 'Select winner Cara' })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(first).toBeFocused();
+});
+
+test('board shows each commitment once and both views preserve all-in status', async ({ page }) => {
+  const game = createGame();
+  game.phase = 'betting';
+  game.players = [createPlayer('alice', 'Alice', 0), createPlayer('bob', 'Bob', 1), createPlayer('cara', 'Cara', 2)];
+  game.actorId = 'alice';
+  game.players[1].committedThisStreet = 25;
+  game.players[2].committedThisStreet = 500;
+  game.players[2].status = 'all-in';
+  game.players[2].stack = 0;
+  const snapshot: Snapshot = {
+    game, you: { id: 'alice', host: false, admin: false, dealing: false, legal: null },
+    joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now(),
+  };
+  await page.routeWebSocket('**/ws', socket => socket.onMessage(() => socket.send(JSON.stringify({ type: 'state', snapshot }))));
+  await page.goto('/board');
+  const bob = page.locator('.seat-card').filter({ has: page.locator('.seat-name', { hasText: 'Bob' }) });
+  const cara = page.locator('.seat-card').filter({ has: page.locator('.seat-name', { hasText: 'Cara' }) });
+  await expect(bob.locator('.seat-status')).toHaveText('In the hand');
+  await expect(bob.locator('.seat-bet')).toHaveText('In front $25');
+  await expect(cara.locator('.seat-status')).toHaveText('all in');
+  await expect(cara.locator('.seat-bet')).toHaveText('In front $500');
+  await page.goto('/');
+  await expect(page.locator('.roster-seat').filter({ hasText: 'Bob' }).locator('.roster-state')).toHaveText('In front $25');
+  await expect(page.locator('.roster-seat').filter({ hasText: 'Cara' }).locator('.roster-state')).toHaveText('all in');
+});
+
+for (const viewport of [{ width: 390, height: 400 }, { width: 844, height: 300 }]) test(`rebuy and controls remain reachable at ${viewport.width}x${viewport.height}, including enlarged text`, async ({ page }) => {
+  const game = createGame();
+  game.phase = 'hand-complete';
+  game.players = [createPlayer('alice', 'Alice', 0, 0), createPlayer('bob', 'Bob', 1), createPlayer('cara', 'Cara', 2)];
+  game.players[0].status = 'busted';
+  const snapshot: Snapshot = {
+    game, you: { id: 'alice', host: false, admin: false, dealing: true, legal: null },
+    joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now(),
+  };
+  const messages: unknown[] = [];
+  await page.routeWebSocket('**/ws', socket => socket.onMessage(raw => {
+    messages.push(JSON.parse(String(raw)));
+    socket.send(JSON.stringify({ type: 'state', snapshot }));
+  }));
+  await page.setViewportSize(viewport);
+  await page.goto('/');
+  const actions = page.locator('.player-actions');
+  const rebuy = actions.getByRole('button', { name: /Buy back in for/ });
+  const shell = page.locator('.player-shell');
+  // Scroll the same container a touch user can scroll, without auto-scrolling locators.
+  await shell.evaluate(el => { el.scrollTop = el.scrollHeight; });
+  await expect(rebuy).toBeInViewport({ ratio: 1 });
+  await expect(page.getByRole('region', { name: 'Your betting controls' })).toBeInViewport({ ratio: 1 });
+  await rebuy.click();
+  expect(messages).toContainEqual({ type: 'rebuy' });
+  // Double computed text sizes, including the app's explicit px sizes.
+  await page.evaluate(() => {
+    const elements = Array.from(document.querySelectorAll<HTMLElement>('.player-shell, .player-shell *'));
+    const sizes = elements.map(el => parseFloat(getComputedStyle(el).fontSize));
+    elements.forEach((el, i) => { el.style.fontSize = `${sizes[i] * 2}px`; });
+  });
+  const controls = [rebuy, actions.getByRole('button', { name: /Deal next hand/ }), actions.getByRole('button', { name: /Open .* sizer/ })];
+  for (const control of controls) {
+    await shell.evaluate((el, label) => {
+      const button = Array.from(el.querySelectorAll('button')).find(button => (button.getAttribute('aria-label') ?? button.textContent)?.includes(label));
+      if (button) el.scrollTop += button.getBoundingClientRect().top - el.getBoundingClientRect().top - 8;
+    }, await control.getAttribute('aria-label') ?? await control.innerText());
+    await expect(control).toBeInViewport({ ratio: 1 });
+  }
+  await shell.evaluate(el => { el.scrollTop = 0; });
+  await expect(page.locator('.player-header')).toBeInViewport({ ratio: 1 });
+  expect(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight)).toBe(true);
 });
