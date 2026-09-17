@@ -6,11 +6,14 @@ import { ChipStack } from '../components/Chips';
 import { BlindTimer } from '../components/BlindTimer';
 import { ActionBar } from '../components/ActionBar';
 import { GameOver, ShowdownModal, StreetModal } from '../components/GameModals';
+import { WinCelebration } from '../components/WinCelebration';
 import { HandLog, TableRoster, SeatMarkers, blindClass } from '../components/PokerTable';
+import { useWinCelebration } from '../net/useWinCelebration';
 import '../styles/game.css';
 
 type Props = { snapshot: Snapshot; send: (msg: ClientMsg) => void; connected: boolean };
 export function PlayerView({ snapshot, send, connected }: Props) {
+  const { celebration, dismiss } = useWinCelebration(snapshot, connected);
   const { game, you } = snapshot;
   const player = game.players.find(p => p.id === you.id);
   if (!player) return <main className="player-page"><section className="game-panel"><h1>Find your place at the table.</h1><p>Choose a seat to join this game.</p><a className="game-button primary" href="/">Choose a seat →</a></section></main>;
@@ -20,6 +23,7 @@ export function PlayerView({ snapshot, send, connected }: Props) {
     <PlayerHeader game={game} connected={connected} />
     <GameOver snapshot={snapshot} />
     <HandLog game={game} />
+    <WinCelebration celebration={celebration} dismiss={dismiss} />
   </main>;
   return <main className="player-page player-shell">
     <div className="player-hand">
@@ -41,6 +45,7 @@ export function PlayerView({ snapshot, send, connected }: Props) {
     </div>
     <StreetModal snapshot={snapshot} send={send} connected={connected} dealer={you.dealing} />
     <ShowdownModal snapshot={snapshot} send={send} connected={connected} dealer={you.dealing} />
+    <WinCelebration celebration={celebration} dismiss={dismiss} />
   </main>;
 }
 

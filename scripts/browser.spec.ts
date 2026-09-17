@@ -793,3 +793,113 @@ for (const viewport of [{ width: 390, height: 400 }, { width: 844, height: 300 }
   await expect(page.locator('.player-header')).toBeInViewport({ ratio: 1 });
   expect(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight)).toBe(true);
 });
+
+test('winning a pot shows a full-screen celebration only to the winner, ignores rebroadcasts and undo, and is tap-to-dismiss', async ({ page }) => {
+  const game = createGame();
+  game.phase = 'showdown'; game.hand = 1;
+  game.players = [createPlayer('alice', 'Alice', 0, 500), createPlayer('bob', 'Bob', 1, 480)];
+  game.pots = [{ amount: 20, eligibleIds: ['alice', 'bob'], awarded: false }];
+  const snapshot: Snapshot = {
+    game, you: { id: 'alice', host: false, admin: false, dealing: false, legal: null },
+    joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: true, serverTime: Date.now(),
+  };
+  let publish = () => {};
+  await page.routeWebSocket('**/ws', socket => { publish = () => socket.send(JSON.stringify({ type: 'state', snapshot })); socket.onMessage(publish); });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  const celebration = page.locator('.win-celebration');
+  await expect(celebration).toHaveCount(0);
+
+  // Award the pot to Alice.
+  game.pots[0] = { ...game.pots[0], awarded: true, winnerIds: ['alice'] };
+  game.players[0].stack = 520;
+  publish();
+  await expect(celebration).toBeVisible();
+  await expect(celebration).toContainText('You won $20');
+  const src = await celebration.locator('img').getAttribute('src');
+  expect(src).toBeTruthy();
+
+  // The server rebroadcasts the same snapshot every second; it must not retrigger or reshuffle the image.
+  publish();
+  await expect(celebration).toBeVisible();
+  expect(await celebration.locator('img').getAttribute('src')).toBe(src);
+
+  // Tap anywhere to dismiss.
+  await celebration.click();
+  await expect(celebration).toHaveCount(0);
+
+  // Undo (awarded → unawarded) must not show a celebration; a fresh award fires again.
+  game.pots[0] = { ...game.pots[0], awarded: false, winnerIds: undefined };
+  game.players[0].stack = 500;
+  publish();
+  await expect(page.locator('.your-stack-balance strong')).toHaveText('$500'); // Let the undo frame commit before re-awarding, or React may batch the two and skip the edge.
+  await expect(celebration).toHaveCount(0);
+  game.pots[0] = { ...game.pots[0], awarded: true, winnerIds: ['alice'] };
+  game.players[0].stack = 520;
+  publish();
+  await expect(celebration).toBeVisible();
+
+  // An eligible player who did NOT win never shows a celebration for someone else's win.
+  game.hand = 2;
+  game.pots = [{ amount: 25, eligibleIds: ['alice', 'bob'], awarded: false }];
+  snapshot.you = { id: 'bob', host: false, admin: false, dealing: false, legal: null };
+  await page.goto('/'); // Fresh load establishes bob's baseline at the unawarded pot.
+  game.pots[0] = { ...game.pots[0], awarded: true, winnerIds: ['alice'] };
+  publish();
+  await expect(celebration).toHaveCount(0);
+});
+
+test('an uncontested win (pots array replaced wholesale) and a split pot both trigger the celebration correctly', async ({ page }) => {
+  const game = createGame();
+  game.phase = 'showdown'; game.hand = 1;
+  game.players = [createPlayer('alice', 'Alice', 0, 480), createPlayer('bob', 'Bob', 1, 500), createPlayer('cara', 'Cara', 2, 500)];
+  game.pots = [{ amount: 20, eligibleIds: ['alice', 'bob'], awarded: false }, { amount: 15, eligibleIds: ['alice'], awarded: false }];
+  const snapshot: Snapshot = {
+    game, you: { id: 'bob', host: false, admin: false, dealing: false, legal: null },
+    joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now(),
+  };
+  let publish = () => {};
+  await page.routeWebSocket('**/ws', socket => { publish = () => socket.send(JSON.stringify({ type: 'state', snapshot })); socket.onMessage(publish); });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  const celebration = page.locator('.win-celebration');
+  await expect(page.locator('.player-header')).toContainText('Hand 1'); // Let the initial join/state exchange settle before mutating.
+
+  // Uncontested win: betting.ts replaces the whole pots array in one update rather than mutating an entry.
+  game.pots = [{ amount: 35, eligibleIds: ['bob'], awarded: true, winnerIds: ['bob'] }];
+  game.players[1].stack = 535;
+  publish();
+  await expect(celebration).toContainText('You won $35');
+  await celebration.click();
+
+  // A split pot reports every winner's share of the celebration text.
+  game.hand = 2;
+  game.pots = [{ amount: 40, eligibleIds: ['bob', 'cara'], awarded: false }];
+  publish();
+  await expect(page.locator('.player-header')).toContainText('Hand 2'); // Let this frame commit before the next publish, or React may batch the two and skip the edge.
+  await expect(celebration).toHaveCount(0);
+  game.pots[0] = { ...game.pots[0], awarded: true, winnerIds: ['bob', 'cara'] };
+  publish();
+  await expect(celebration).toContainText('You won $40 · split 2 ways');
+});
+
+test('winning the final pot of the tournament still shows the celebration on the game-over screen', async ({ page }) => {
+  const game = createGame();
+  game.phase = 'tournament-over'; game.hand = 5;
+  game.players = [createPlayer('alice', 'Alice', 0, 1000), createPlayer('bob', 'Bob', 1, 0)];
+  game.players[1].status = 'busted'; game.players[1].bustOrder = 1;
+  game.pots = [{ amount: 40, eligibleIds: ['alice', 'bob'], awarded: false }];
+  const snapshot: Snapshot = {
+    game, you: { id: 'alice', host: false, admin: false, dealing: false, legal: null },
+    joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: true, serverTime: Date.now(),
+  };
+  let publish = () => {};
+  await page.routeWebSocket('**/ws', socket => { publish = () => socket.send(JSON.stringify({ type: 'state', snapshot })); socket.onMessage(publish); });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await expect(page.locator('.game-over')).toBeVisible();
+  game.pots[0] = { ...game.pots[0], awarded: true, winnerIds: ['alice'] };
+  game.players[0].stack = 1040;
+  publish();
+  await expect(page.locator('.win-celebration')).toContainText('You won $40');
+});

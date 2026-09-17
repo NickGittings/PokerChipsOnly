@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 320">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="42%" r="65%">
+      <stop offset="0%" stop-color="#2c6e4a"/>
+      <stop offset="100%" stop-color="#0B2517"/>
+    </radialGradient>
+  </defs>
+  <rect width="320" height="320" rx="28" fill="url(#bg)"/>
+  <g stroke="#12301E" stroke-width="4">
+    <circle cx="130" cy="200" r="46" fill="#D9B26A"/>
+    <circle cx="130" cy="200" r="46" fill="none" stroke="#12301E" stroke-width="10" stroke-dasharray="6 10"/>
+    <circle cx="190" cy="150" r="46" fill="#3E8E5A"/>
+    <circle cx="190" cy="150" r="46" fill="none" stroke="#12301E" stroke-width="10" stroke-dasharray="6 10"/>
+    <circle cx="160" cy="95" r="46" fill="#C0392B"/>
+    <circle cx="160" cy="95" r="46" fill="none" stroke="#12301E" stroke-width="10" stroke-dasharray="6 10"/>
+  </g>
+  <text x="160" y="270" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="34" fill="#D9B26A">You win!</text>
+</svg>
