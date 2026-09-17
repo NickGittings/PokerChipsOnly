@@ -1,9 +1,9 @@
-import type { GameState } from '../../shared/types';
+import type { GameState, LedgerKind } from '../../shared/types';
 import { chipUnit } from '../../shared/chips';
 import { blindLevel } from '../../shared/blinds';
 import { placeOf, standings } from '../../shared/standings';
 import { timeUp } from '../../shared/clock';
-import { log } from './helpers';
+import { log, record } from './helpers';
 function endOnChips(g: GameState) {
   g.phase = 'tournament-over'; g.clockPaused = true;
   const leaders = standings(g).filter(({ place }) => place === 1).map(({ player }) => player.name);
@@ -13,15 +13,19 @@ export function tickClock(state: GameState, now: number): GameState {
   const g = structuredClone(state);
   if (!g.clockPaused && !['lobby', 'tournament-over'].includes(g.phase)) {
     const elapsed = Math.max(0, now - g.clockUpdatedAt);
-    g.clockRemainingMs -= elapsed; g.elapsedMs += elapsed;
-    const length = g.config.levelMinutes * 60_000;
-    if (g.clockRemainingMs <= 0) { const levels = Math.floor(-g.clockRemainingMs / length) + 1; g.pendingLevel += levels; g.clockRemainingMs += levels * length; }
+    g.elapsedMs += elapsed;
+    if (g.config.blindPace === 'time') {
+      g.clockRemainingMs -= elapsed;
+      const length = g.config.levelMinutes * 60_000;
+      if (g.clockRemainingMs <= 0) { const levels = Math.floor(-g.clockRemainingMs / length) + 1; g.pendingLevel += levels; g.clockRemainingMs += levels * length; }
+    }
   }
   g.clockUpdatedAt = now;
   if (g.phase === 'hand-complete' && timeUp(g)) endOnChips(g);
   return g;
 }
 export function finishHand(g: GameState) {
+  for (const p of g.players) if (p.status !== 'busted' && p.status !== 'sitting-out' && p.stack !== p.handStartStack) record(g, p, 'hand', p.stack - p.handStartStack);
   const alive = g.players.filter(p => p.stack > 0);
   const busted = g.players.filter(p => p.stack === 0 && p.status !== 'busted').sort((a, b) => b.handStartStack - a.handStartStack || a.seat - b.seat);
   // Assign worst-to-best so ties (equal handStartStack) share one sequence value,
@@ -30,12 +34,12 @@ export function finishHand(g: GameState) {
   for (const p of [...busted].reverse()) { if (p.handStartStack !== lastStack) order = ++g.bustSequence; p.status = 'busted'; p.bustOrder = order; lastStack = p.handStartStack; }
   for (const p of busted) log(g, `${p.name} finishes #${placeOf(g, p)}.`);
   for (const p of g.players) { p.committedThisHand = 0; p.committedThisStreet = 0; p.deadAnte = 0; }
-  g.actorId = null; g.currentBet = 0;
+  g.actorId = null; g.currentBet = 0; g.awaitingDeal = false;
   g.phase = alive.length === 1 ? 'tournament-over' : 'hand-complete';
   if (alive.length === 1) { g.clockPaused = true; log(g, `${alive[0].name} wins the tournament!`); }
   else if (timeUp(g)) endOnChips(g);
 }
-export function adjustStack(state: GameState, id: string, delta: number) {
+export function adjustStack(state: GameState, id: string, delta: number, kind: LedgerKind = 'adjust') {
   const g = structuredClone(state), p = g.players.find(p => p.id === id), unit = chipUnit(g.config.denominations);
   if (!['hand-complete', 'tournament-over'].includes(g.phase)) throw new Error('Adjust stacks between hands. Starting stacks are configured in setup; undo an action to fix a live hand.');
   if (!p || !Number.isSafeInteger(delta) || delta === 0 || delta % unit || p.stack + delta < 0 || g.totalChips + delta > 1_000_000 || g.totalChips + delta <= 0) throw new Error('Enter a makeable adjustment that keeps stacks nonnegative and total chips at most 1,000,000.');
@@ -43,14 +47,15 @@ export function adjustStack(state: GameState, id: string, delta: number) {
   if (p.stack > 0) { p.status = 'active'; delete p.bustOrder; }
   else { p.status = 'busted'; p.bustOrder = ++g.bustSequence; }
   if (!(g.phase === 'tournament-over' && timeUp(g))) g.phase = g.players.filter(p => p.stack > 0).length > 1 ? 'hand-complete' : 'tournament-over';
-  log(g, `Host adjusted ${p.name}: ${delta > 0 ? '+' : ''}${delta} chips.`); return g;
+  record(g, p, kind, delta);
+  log(g, kind === 'buy-back' ? `${p.name} bought back in for ${delta} chips.` : `Host adjusted ${p.name}: ${delta > 0 ? '+' : ''}${delta} chips.`); return g;
 }
 export function adjustLevel(state: GameState, delta: number) {
   if (['lobby', 'tournament-over'].includes(state.phase)) throw new Error('Adjust blinds only during a live tournament.');
   if (delta !== 1 && delta !== -1) throw new Error('Move the blind level up or down by one.');
   if (state.pendingLevel + delta < 1) throw new Error('Blinds cannot drop below level 1.');
   const g = structuredClone(state);
-  g.pendingLevel += delta; g.clockRemainingMs = g.config.levelMinutes * 60_000;
+  g.pendingLevel += delta; g.levelStartHand = g.hand; g.clockRemainingMs = g.config.levelMinutes * 60_000;
   log(g, `Host moved blinds ${delta > 0 ? 'up' : 'down'} to level ${g.pendingLevel}.`); return g;
 }
 export function colorUpSuggested(g: GameState) { return g.config.denominations.length > 2 && chipUnit(g.config.denominations) < blindLevel(g.config, g.level).small / 10; }

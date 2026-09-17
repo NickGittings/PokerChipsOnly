@@ -6,7 +6,7 @@ import { buildPots, refundUncalled } from './pots';
 import { finishHand } from './tournament';
 export function legalActions(g: GameState, id: string): LegalActions | null {
   const p = g.players.find(p => p.id === id);
-  if (g.phase !== 'betting' || g.actorId !== id || p?.status !== 'active') return null;
+  if (g.awaitingDeal || g.phase !== 'betting' || g.actorId !== id || p?.status !== 'active') return null;
   const owed = Math.max(0, g.currentBet - p.committedThisStreet), max = p.committedThisStreet + p.stack;
   const rights = !p.hasActedThisRound || g.currentBet - p.actedAtBet >= g.lastFullRaiseSize;
   const opponent = g.players.some(other => other.id !== id && other.status === 'active');

@@ -5,12 +5,19 @@ import { placeOf } from '../../shared/standings';
 import { ChipStack } from './Chips';
 import { useSeatDrag } from './useSeatDrag';
 
+export function blindClass(game: GameState, seat: number): string {
+  return game.bigBlindSeat === seat ? 'seat-bb' : game.smallBlindSeat === seat ? 'seat-sb' : '';
+}
+export function SeatMarkers({ game, seat }: { game: GameState; seat: number }) {
+  return <span className="seat-markers">{game.button === seat && <i className="m-d" title="Dealer button">D</i>}{game.smallBlindSeat === seat && <i className="m-sb" title="Small blind">SB</i>}{game.bigBlindSeat === seat && <i className="m-bb" title="Big blind">BB</i>}</span>;
+}
+
 export function SeatBadge({ player, game }: { player?: Player; game: GameState }) {
   if (!player) return <div className="seat-empty">Open seat</div>;
   const acting = game.actorId === player.id;
   const place = placeOf(game, player);
-  return <div className={`seat-card ${acting ? 'seat-acting' : ''} ${!player.connected ? 'seat-offline' : ''} ${player.status === 'folded' || player.status === 'busted' ? 'seat-muted' : ''}`}>
-    <div className="seat-top"><span className="seat-avatar">{player.name.slice(0, 1).toUpperCase()}</span><span className="seat-name">{player.name}</span><span className="seat-markers">{game.button === player.seat && <i title="Dealer button">D</i>}{game.smallBlindSeat === player.seat && <i title="Small blind">SB</i>}{game.bigBlindSeat === player.seat && <i title="Big blind">BB</i>}</span></div>
+  return <div className={`seat-card ${blindClass(game, player.seat)} ${acting ? 'seat-acting' : ''} ${!player.connected ? 'seat-offline' : ''} ${player.status === 'folded' || player.status === 'busted' ? 'seat-muted' : ''}`}>
+    <div className="seat-top"><span className="seat-avatar">{player.name.slice(0, 1).toUpperCase()}</span><span className="seat-name">{player.name}</span><SeatMarkers game={game} seat={player.seat} /></div>
     <strong className="seat-stack">{money(player.stack)}</strong><div className="seat-chip-row"><ChipStack amount={player.stack} denominations={game.config.denominations} /></div>
     <span className="seat-status">{!player.connected ? 'Reconnecting…' : acting ? 'Your action' : place ? `Finished #${place}` : player.status === 'active' ? 'In the hand' : player.status.replace('-', ' ')}</span>
     {player.committedThisStreet > 0 && <div className="seat-bet">In front <b>{money(player.committedThisStreet)}</b></div>}
@@ -28,10 +35,10 @@ export function TableRoster({ game }: { game: GameState }) {
   }, [game.actorId]);
   return <div ref={rosterRef} className="player-roster" aria-label="Players at the table">{[...game.players].sort((a, b) => a.seat - b.seat).map(p => {
     const acting = game.actorId === p.id;
-    return <div ref={acting ? actorRef : undefined} key={p.id} className={`roster-seat ${acting ? 'acting' : ''} ${p.status === 'folded' || p.status === 'busted' ? 'muted' : ''} ${!p.connected ? 'offline' : ''}`}>
+    return <div ref={acting ? actorRef : undefined} key={p.id} className={`roster-seat ${blindClass(game, p.seat)} ${acting ? 'acting' : ''} ${p.status === 'folded' || p.status === 'busted' ? 'muted' : ''} ${!p.connected ? 'offline' : ''}`}>
       <span className="roster-avatar">{p.name.slice(0, 1).toUpperCase()}</span>
       <div className="roster-info"><small>{p.name}</small><b>{money(p.stack)}</b></div>
-      <span className="seat-markers">{game.button === p.seat && <i title="Dealer button">D</i>}{game.smallBlindSeat === p.seat && <i title="Small blind">SB</i>}{game.bigBlindSeat === p.seat && <i title="Big blind">BB</i>}</span>
+      <SeatMarkers game={game} seat={p.seat} />
     </div>;
   })}</div>;
 }
@@ -43,7 +50,7 @@ export function PotDisplay({ game }: { game: GameState }) {
 
 export function PokerTable({ game, compact = false, onMoveSeat }: { game: GameState; compact?: boolean; onMoveSeat?: (playerId: string, seat: number) => void }) {
   const { seatProps, announcement } = useSeatDrag(game.players, onMoveSeat);
-  return <div className={`poker-table-wrap ${compact ? 'table-compact' : ''}`}><div className="table-felt"><div className="table-brand">POKER CHIPS <span>REAL CARDS. GOOD COMPANY.</span></div><PotDisplay game={game} /><div className="table-status">{game.phase === 'betting' ? `${game.players.find(p => p.id === game.actorId)?.name ?? 'Table'} to act` : game.phase === 'street-break' ? `Ready for the ${game.pendingStreet}` : game.phase === 'showdown' ? 'Time to show your cards' : game.phase === 'lobby' ? 'Take a seat. Make a night of it.' : game.phase === 'tournament-over' ? 'A champion at the table' : 'Hand complete'}</div></div><div className="table-seats">{Array.from({ length: 8 }, (_, seat) => {
+  return <div className={`poker-table-wrap ${compact ? 'table-compact' : ''}`}><div className="table-felt"><div className="table-brand">POKER CHIPS <span>REAL CARDS. GOOD COMPANY.</span></div><PotDisplay game={game} /><div className="table-status">{game.awaitingDeal ? 'Ready for the hole cards' : game.phase === 'betting' ? `${game.players.find(p => p.id === game.actorId)?.name ?? 'Table'} to act` : game.phase === 'street-break' ? `Ready for the ${game.pendingStreet}` : game.phase === 'showdown' ? 'Time to show your cards' : game.phase === 'lobby' ? 'Take a seat. Make a night of it.' : game.phase === 'tournament-over' ? 'A champion at the table' : 'Hand complete'}</div></div><div className="table-seats">{Array.from({ length: 8 }, (_, seat) => {
     const player = game.players.find(p => p.seat === seat);
     const { className, ...seatHandlers } = seatProps(seat, player);
     return <div key={seat} className={`table-seat table-seat-${seat} ${className}`} {...seatHandlers}><SeatBadge game={game} player={player} /></div>;

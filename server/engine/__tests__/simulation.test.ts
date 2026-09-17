@@ -15,7 +15,8 @@ describe('multi-hand chip conservation', () => {
       let g = game(2 + seed % 7, { startingStack: 100, anteMode: seed % 3 === 0 ? 'per-player' : seed % 3 === 1 ? 'big-blind' : 'none', ante: 5 });
       for (let step = 0; step < 500 && g.phase !== 'tournament-over'; step++) {
         assertChips(g);
-        if (g.phase === 'street-break') g = advanceStreet(g);
+        if (g.awaitingDeal) g.awaitingDeal = false;
+        else if (g.phase === 'street-break') g = advanceStreet(g);
         else if (g.phase === 'hand-complete') g = startHand(g);
         else if (g.phase === 'showdown') {
           const index = g.pots.findIndex(p => !p.awarded), eligible = g.pots[index].eligibleIds;

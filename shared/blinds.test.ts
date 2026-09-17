@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { blindLevel, DEFAULT_CONFIG, levelNotice, validateConfig } from './blinds';
+import { blindLevel, DEFAULT_CONFIG, handsToNextLevel, levelNotice, validateConfig } from './blinds';
 import { isMakeable } from './chips';
 import { createGame } from '../server/engine/state';
 
@@ -37,6 +37,20 @@ describe('blind generation and setup validation', () => {
   });
   it.each([0, 5, 720])('accepts time limit %i', durationMinutes => {
     expect(validateConfig({ ...DEFAULT_CONFIG, durationMinutes })).toEqual([]);
+  });
+  it('validates both blind paces and ignores unused time bounds for hands mode', () => {
+    for (const blindPace of ['time', 'hands'] as const) for (const levelHands of [1, 10, 100]) expect(validateConfig({ ...DEFAULT_CONFIG, blindPace, levelHands })).toEqual([]);
+    expect(validateConfig({ ...DEFAULT_CONFIG, blindPace: 'hands', levelMinutes: 0 })).toEqual([]);
+    for (const levelHands of [0, 101, 1.5, NaN, Infinity]) expect(validateConfig({ ...DEFAULT_CONFIG, levelHands })).toContain('Hands per level must be a whole number from 1–100.');
+    expect(validateConfig({ ...DEFAULT_CONFIG, blindPace: 'rounds' as never })).toContain('Choose blinds by time or hands.');
+  });
+  it('counts the distance to the next hand-based level, including queued changes', () => {
+    const g = createGame({ ...DEFAULT_CONFIG, blindPace: 'hands' });
+    g.hand = 1; expect(handsToNextLevel(g)).toBe(10); expect(levelNotice(g)).toBe('Next level · in 10 hands');
+    g.hand = 9; expect(handsToNextLevel(g)).toBe(2);
+    g.hand = 10; g.levelStartHand = 10; g.pendingLevel = 2;
+    expect(handsToNextLevel(g)).toBe(1); expect(levelNotice(g)).toBe('Blinds up next hand · level 2');
+    g.hand = 11; g.level = 2; expect(handsToNextLevel(g)).toBe(10);
   });
   it('describes a pending blind change only while one is queued', () => {
     const g = createGame(DEFAULT_CONFIG);

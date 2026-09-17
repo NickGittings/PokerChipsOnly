@@ -74,6 +74,49 @@ describe('tournament lifecycle', () => {
     expect(g.clockRemainingMs).toBe(55_000);
   });
 
+  it('plays ten hands at each level and queues the next level at the last hand', () => {
+    let g = game(3, { blindPace: 'hands', levelHands: 10 });
+    for (let hand = 1; hand <= 21; hand++) {
+      expect(g.hand).toBe(hand); expect(g.level).toBe(Math.floor((hand - 1) / 10) + 1);
+      expect(g.pendingLevel).toBe(Math.floor(hand / 10) + 1);
+      assertChips(g);
+      if (hand < 21) { g = act(g, 'fold'); g = act(g, 'fold'); g = startHand(g); }
+    }
+  });
+
+  it('supports a level every hand and restarts the hand count after manual blind changes', () => {
+    let g = game(3, { blindPace: 'hands', levelHands: 1 });
+    expect(g).toMatchObject({ level: 1, pendingLevel: 2, levelStartHand: 1 });
+    g = act(g, 'fold'); g = act(g, 'fold'); g = startHand(g);
+    expect(g).toMatchObject({ level: 2, pendingLevel: 3, levelStartHand: 2 });
+    g.config.levelHands = 3; g = adjustLevel(g, 1);
+    expect(g).toMatchObject({ level: 2, pendingLevel: 4, levelStartHand: 2 });
+    for (let hand = 3; hand <= 6; hand++) {
+      g = act(g, 'fold'); g = act(g, 'fold'); g = startHand(g);
+      expect(g.level).toBe(hand < 6 ? 4 : 5);
+    }
+  });
+
+  it('keeps the total time limit running in hands mode without clock-based blind raises', () => {
+    let g = game(3, { blindPace: 'hands', levelHands: 10, levelMinutes: 1, durationMinutes: 5 });
+    g = tickClock(g, 300_000);
+    expect(g).toMatchObject({ level: 1, pendingLevel: 1, clockRemainingMs: 60_000, elapsedMs: 300_000, phase: 'betting' });
+    g = act(g, 'fold'); g = act(g, 'fold');
+    expect(g).toMatchObject({ phase: 'tournament-over', clockPaused: true }); assertChips(g);
+  });
+
+  it('records hand deltas once for participants and retains at most a thousand ledger entries', () => {
+    let g = game(3);
+    g = act(g, 'fold'); g = act(g, 'fold');
+    expect(g.ledger.filter(e => e.kind === 'hand').map(e => [e.playerId, e.amount])).toEqual([['p1', -5], ['p2', 5]]);
+    g = adjustStack(g, 'p1', -player(g, 'p1').stack);
+    g = startHand(g); g = act(g, 'fold');
+    expect(g.ledger.filter(e => e.kind === 'hand' && e.playerId === 'p1')).toHaveLength(1);
+    expect(g.ledger.filter(e => e.kind === 'hand' && e.hand === 2).reduce((sum, e) => sum + e.amount, 0)).toBe(0);
+    for (let i = 0; i < 1002; i++) g = adjustStack(g, 'p0', i % 2 ? -5 : 5);
+    expect(g.ledger).toHaveLength(1000); expect(g.ledger.every(e => e.kind === 'adjust')).toBe(true); assertChips(g);
+  });
+
   it('ranks simultaneous bust-outs by starting stack and ties equal stacks', () => {
     const g = createGame(config());
     g.players = [500, 200, 100, 100].map((n, i) => createPlayer(`p${i}`, `P${i}`, i, n));
