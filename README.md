@@ -35,6 +35,8 @@ Betting locks at every street break. Deal the prompted real cards, then tap **Ca
 
 The board admin can undo the latest game changes, pause the clock, step the blinds up or down, and adjust stacks between hands. Adjustments are logged and alter the tournament's total chips; use positive adjustments for a rebuy or add-on and negative ones for corrections. Setup owns starting stacks; lobby adjustments are disabled. A rebuy after a last-player-standing ending leaves the clock paused until the host resumes it. After a time-limit ending, stack corrections update the standings without restarting the tournament. Undo history holds up to 100 states and is not saved across server restarts. Clock time is not refunded by undo. During a timed tournament, **−15 min / +15 min** changes the total time limit within 5–720 minutes without resetting elapsed time or the blind timer. These adjustments survive hand undo; reducing the limit past elapsed time finishes the current hand before ending the tournament. Undo cannot physically take back cards that the dealer has already shown.
 
+The board (not the host's phone) also has a **New game** button, available any time a tournament is running, even mid-hand. After confirming, it returns the table to the lobby: everyone keeps their seat and name, but stacks, pots, and the hand log are cleared, and the clock stops until the host resumes it. Reconfigure in Setup and start again once at least two players are seated. Undo reverses an accidental New game and restores the tournament with its play time and blind level intact, though the clock stays paused until resumed.
+
 ## House rules
 
 - No cards are generated, read, ranked, or evaluated. Each pot is awarded by the humans at the table.
@@ -54,7 +56,7 @@ The server atomically replaces `.state.json` after accepted state changes and sa
 
 Recovery is local to this folder and laptop. A sudden power loss can lose time since the last clock checkpoint. Save failures are reported to connected clients; keep the process alive until the disk issue is resolved. Unsupported or inconsistent saves stop startup instead of silently discarding the tournament.
 
-To start a completely fresh tournament, stop the server and move `.state.json` to a backup location before restarting. Keep it if you might need the prior game. Never remove or edit the save while the server is running. `STATE_FILE=/path/to/game.json` selects another save file; `STATE_FILE=:memory:` disables persistence for throwaway testing. Save files include reconnect tokens and are excluded from Git.
+To start a new tournament with the same players still seated, use the board's **New game** button — no server restart needed. To also clear every player identity and rejoin from scratch, stop the server and move `.state.json` to a backup location before restarting. Keep it if you might need the prior game. Never remove or edit the save while the server is running. `STATE_FILE=/path/to/game.json` selects another save file; `STATE_FILE=:memory:` disables persistence for throwaway testing. Save files include reconnect tokens and are excluded from Git.
 
 ## Verification
 
@@ -80,6 +82,7 @@ Before relying on the app at a real table, complete this hardware smoke test:
 4. Undo an accidental fold. Lock a phone, reopen it, and confirm its seat, stack, and turn return.
 5. In a throwaway game, choose **Turbo** and confirm level length, multiplier, and time limit move together; edit the time limit and confirm Turbo deselects. Start with a one-minute level and a five-minute limit (the minimum). Pause and resume to check both countdowns freeze. Mid-hand, use **Blinds ↑ / ↓**: verify changes queue until the next hand and do not change **Game ends in**. Let time expire during a hand, confirm **Time's up · final hand**, then finish and check standings by chips, including tied places. Undo the final award and finish again.
 6. Restart the server mid-hand; confirm the elapsed play time and time limit survive recovery, then resume the paused clock. Test stack adjustments between hands and after a time-limit ending; final standings should update without restarting play.
-7. Check setup colors and spacing, QR readability, and the bottom action bar on your actual phones. Wake Lock, vibration, and sound depend on browser support and permissions; plain LAN HTTP can restrict Wake Lock. Keep the laptop awake with OS settings if needed.
+7. Mid-hand, tap **New game** on the board and confirm: seats, names, and identities are kept, stacks and the hand log clear, and the board returns to the lobby. Undo it and confirm the tournament returns with its stacks, blind level, and play time intact, clock paused; resume the clock and continue the hand. Confirm the button is absent from the host's phone.
+8. Check setup colors and spacing, QR readability, and the bottom action bar on your actual phones. Wake Lock, vibration, and sound depend on browser support and permissions; plain LAN HTTP can restrict Wake Lock. Keep the laptop awake with OS settings if needed.
 
 The reference screenshot itself was not included in this workspace; visual implementation follows the supplied green felt/gold token specification. Real Wi-Fi, phone sleep/reconnect behavior, physical dealing, and screenshot matching require hands-on verification.

@@ -28,3 +28,11 @@ export function startHand(state: GameState) {
   else if (g.config.anteMode === 'per-player') players.forEach(p => pay(p, blinds.ante, false));
   settleRound(g, bb.seat); return g;
 }
+export function resetToLobby(state: GameState, now = 0) {
+  if (state.phase === 'lobby') throw new Error('The table is already in the lobby. Set up and start when everyone is seated.');
+  const g = createGame(state.config, now);
+  g.players = state.players.map(p => { const seat = createPlayer(p.id, p.name, p.seat); seat.connected = p.connected; return seat; });
+  g.logSequence = state.logSequence;
+  log(g, 'Host started a new game. Seats kept — stacks and hand history cleared.');
+  return g;
+}

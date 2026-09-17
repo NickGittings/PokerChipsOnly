@@ -42,6 +42,11 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
   const alice = await phone(browser, 'Alice', 0), bob = await phone(browser, 'Bob', 1), cara = await phone(browser, 'Cara', 2);
   const phones = [alice, bob, cara];
   try {
+    await board.getByRole('button', { name: 'Remove Cara from seat 3', exact: true }).click();
+    await expect.poll(() => snapshot()?.game.players.length).toBe(2);
+    await expect(cara.page.getByLabel('Your name')).toBeVisible();
+    await board.getByRole('button', { name: /Undo last action/ }).click();
+    await expect.poll(() => cara.snapshot()?.game.players.some(p => p.id === cara.snapshot().you.id)).toBe(true);
     await board.goto('/setup');
     await expect(board.locator('.join-large .qr-well canvas')).toBeVisible();
     await expect(board.locator('.join-large .join-url')).toHaveText('http://127.0.0.1:3301');
@@ -143,6 +148,14 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
     await board.screenshot({ path: 'test-results/board.png', fullPage: true });
     await alice.page.screenshot({ path: 'test-results/player-mobile.png', fullPage: true });
     await expect.poll(() => alice.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    for (const height of [667, 844]) {
+      await alice.page.setViewportSize({ width: 390, height });
+      const pot = alice.page.locator('.player-pot-row');
+      await expect(pot).toBeInViewport({ ratio: 1 });
+      await expect(pot.locator('strong').first()).toHaveText('15');
+      await alice.page.locator('.player-context').evaluate(el => { el.scrollTop = el.scrollHeight; });
+      await expect(pot).toBeInViewport({ ratio: 1 });
+    }
     const contextBox = await alice.page.locator('.player-context').boundingBox();
     const controlsBox = await alice.page.getByRole('region', { name: 'Your betting controls' }).boundingBox();
     expect(contextBox!.y + contextBox!.height).toBeLessThanOrEqual(controlsBox!.y);
