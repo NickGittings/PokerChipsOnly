@@ -171,10 +171,14 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
     for (const height of [667, 844]) {
       await alice.page.setViewportSize({ width: 390, height });
       const pot = alice.page.locator('.player-pot-row');
+      await expect.poll(() => alice.page.evaluate(() => document.documentElement.scrollHeight <= innerHeight)).toBe(true);
+      await expect(alice.page.getByRole('region', { name: 'Your betting controls' })).toBeInViewport({ ratio: 1 });
+      await expect.poll(() => alice.page.locator('.player-flow').evaluate(el => el.scrollHeight <= el.clientHeight)).toBe(true);
       await expect(pot).toBeInViewport({ ratio: 1 });
       await expect(pot.locator('strong').first()).toHaveText('$15');
-      await alice.page.locator('.player-context').evaluate(el => { el.scrollTop = el.scrollHeight; });
+      await alice.page.locator('.player-flow').evaluate(el => { el.scrollTop = el.scrollHeight; });
       await expect(pot).toBeInViewport({ ratio: 1 });
+      if (height === 667) await alice.page.screenshot({ path: 'test-results/player-mobile-short.png', fullPage: true });
     }
     const contextBox = await alice.page.locator('.player-context').boundingBox();
     const controlsBox = await alice.page.getByRole('region', { name: 'Your betting controls' }).boundingBox();
@@ -210,8 +214,8 @@ test('board and three phones play, reconnect, and award a layered all-in pot', a
     }
 
     // Hand one: create distinct stack depths without eliminating a player.
+    await alice.page.getByRole('button', { name: 'Open Raise sizer', exact: true }).click();
     await alice.page.getByLabel('Raise to', { exact: true }).fill('30');
-    await alice.page.getByRole('button', { name: 'Review raise', exact: true }).click();
     await alice.page.getByRole('button', { name: 'Confirm raise', exact: true }).click();
     await expect.poll(() => snapshot().game.currentBet).toBe(30);
     await clickAction('Call'); await clickAction('Fold');
@@ -320,7 +324,7 @@ for (const trigger of ['watchdog', 'screen wake']) test(`a silent socket reconne
   await page.clock.runFor(3000);
   game.hand = 2;
   publishers[0]();
-  await expect(page.locator('.player-game-name')).toContainText('Hand 2');
+  await expect(page.locator('.player-header')).toContainText('Hand 2');
   await page.clock.runFor(3000);
   await expect(call).toBeEnabled();
   expect(joins).toHaveLength(1);
@@ -331,6 +335,8 @@ for (const trigger of ['watchdog', 'screen wake']) test(`a silent socket reconne
     await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
   }
   await expect(page.locator('.connection-banner')).toBeVisible();
+  await expect(page.locator('.connection-banner')).toHaveCSS('position', 'fixed');
+  expect(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight)).toBe(true);
   await expect(call).toBeDisabled();
   await page.clock.runFor(1000);
   await expect.poll(() => joins.length).toBe(2);
@@ -374,6 +380,9 @@ test('time limit shows the final hand and ranks surviving stacks on board and ph
   await expect(page.getByRole('heading', { name: 'Bob and Cara tie.', exact: true })).toBeVisible();
   await expect(page.locator('.game-over .report-player header strong')).toHaveText(['#1Bob', '#1Cara', '#3Alice']);
   await expect(page.locator('.game-over .report-player')).toHaveCount(3);
+  await expect(page.locator('.player-shell')).toHaveCount(0);
+  await page.locator('.player-page > .hand-log').scrollIntoViewIfNeeded();
+  expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
   await expect(page.locator('.host-panel')).toHaveCount(0);
   await page.goto('/board');
   await expect(page.getByRole('button', { name: 'Blinds ↑', exact: true })).toBeDisabled();
@@ -384,11 +393,11 @@ test('time limit shows the final hand and ranks surviving stacks on board and ph
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-test('player screen pins a roster with turn, dealer, and blind markers above the scrolling panel', async ({ page }) => {
+test('player screen shows a 2x2 roster with turn, dealer, and blind markers below the pinned stack', async ({ page }) => {
   const game = createGame();
   game.phase = 'betting';
-  game.players = [createPlayer('alice', 'Alice', 0, 500), createPlayer('bob', 'Bob', 1, 495), createPlayer('cara', 'Cara', 2, 490)];
-  game.button = 0; game.smallBlindSeat = 1; game.bigBlindSeat = 2; game.actorId = 'bob'; game.totalChips = 1485;
+  game.players = [createPlayer('alice', 'Alice', 0, 500), createPlayer('bob', 'Bob', 1, 495), createPlayer('cara', 'Cara', 2, 490), createPlayer('dan', 'Dan', 3, 500)];
+  game.button = 0; game.smallBlindSeat = 1; game.bigBlindSeat = 2; game.actorId = 'bob'; game.totalChips = 1985;
   const snapshot: Snapshot = {
     game, you: { id: 'alice', host: false, admin: false, dealing: false, legal: null },
     joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: false, serverTime: Date.now(),
@@ -399,14 +408,29 @@ test('player screen pins a roster with turn, dealer, and blind markers above the
   await page.goto('/');
   const roster = page.locator('.player-roster'), seats = roster.locator('.roster-seat');
   await expect(roster).toBeVisible();
-  await expect(seats).toHaveCount(3);
+  await expect(seats).toHaveCount(4);
+  for (const width of [320, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    const boxes = await seats.evaluateAll(elements => elements.map(el => {
+      const { x, y, width, height } = el.getBoundingClientRect();
+      return { x, y, width, height };
+    }));
+    expect(boxes[0].y).toBe(boxes[1].y);
+    expect(boxes[2].y).toBe(boxes[3].y);
+    expect(boxes[2].y).toBeGreaterThanOrEqual(boxes[0].y + boxes[0].height);
+    expect(boxes[0].x).toBe(boxes[2].x);
+    expect(boxes[1].x).toBe(boxes[3].x);
+    expect(boxes[1].x).toBeGreaterThanOrEqual(boxes[0].x + boxes[0].width);
+    expect(await roster.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+  }
   await expect(seats.nth(0)).toContainText('Alice'); await expect(seats.nth(0).locator('.seat-markers')).toContainText('D');
   await expect(seats.nth(1)).toContainText('Bob'); await expect(seats.nth(1).locator('.seat-markers')).toContainText('SB'); await expect(seats.nth(1)).toHaveClass(/acting/);
   await expect(seats.nth(1)).toHaveClass(/seat-sb/);
   await expect(seats.nth(2)).toHaveClass(/seat-bb/);
   await expect(seats.nth(2)).toContainText('Cara'); await expect(seats.nth(2).locator('.seat-markers')).toContainText('BB');
   const rosterBox = await roster.boundingBox(), contextBox = await page.locator('.player-context').boundingBox();
-  expect(rosterBox!.y + rosterBox!.height).toBeLessThanOrEqual(contextBox!.y);
+  expect(rosterBox!.y).toBeGreaterThanOrEqual(contextBox!.y + contextBox!.height);
+  expect(rosterBox!.y + rosterBox!.height).toBeLessThanOrEqual((await page.getByRole('region', { name: 'Your betting controls' }).boundingBox())!.y);
   const actingFill = await seats.nth(1).evaluate(el => getComputedStyle(el).backgroundColor);
   const bigBlindFill = await seats.nth(2).evaluate(el => getComputedStyle(el).backgroundColor);
   expect(actingFill).not.toBe(bigBlindFill);
@@ -415,9 +439,14 @@ test('player screen pins a roster with turn, dealer, and blind markers above the
   await expect(seats.nth(2)).toHaveCSS('background-color', actingFill);
   expect(await seats.nth(1).evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe(actingFill);
   expect(await seats.nth(1).evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe(bigBlindFill);
+  game.players.push(createPlayer('eve', 'Eve', 4, 500), createPlayer('fred', 'Fred', 5, 500));
+  game.log = [{ id: 1, text: 'Bob calls $10.' }, { id: 2, text: 'Cara checks.' }];
+  publish();
+  await expect(seats).toHaveCount(6);
+  expect(await page.locator('.player-flow').evaluate(el => el.scrollHeight <= el.clientHeight)).toBe(true);
 });
 
-test('following the actor scrolls the roster without moving the page', async ({ page }) => {
+for (const height of [400, 667, 844]) test(`following the actor at ${height}px keeps them visible without moving the page`, async ({ page }) => {
   const game = createGame();
   game.phase = 'betting';
   game.players = Array.from({ length: 8 }, (_, seat) => createPlayer(`player-${seat}`, `Player ${seat + 1}`, seat));
@@ -431,7 +460,7 @@ test('following the actor scrolls the roster without moving the page', async ({ 
     publish = () => socket.send(JSON.stringify({ type: 'state', snapshot }));
     socket.onMessage(publish);
   });
-  await page.setViewportSize({ width: 390, height: 400 });
+  await page.setViewportSize({ width: 390, height });
   await page.goto('/');
   const roster = page.locator('.player-roster');
   await expect(roster.locator('.acting')).toContainText('Player 1');
@@ -439,16 +468,22 @@ test('following the actor scrolls the roster without moving the page', async ({ 
     window.scrollTo(0, document.documentElement.scrollHeight);
     return window.scrollY;
   });
-  expect(scrollY).toBeGreaterThan(0);
-  expect((await roster.boundingBox())!.y).toBeLessThan(0);
+  expect(scrollY).toBe(0);
+  const flow = page.locator('.player-flow');
+  const topbarBefore = await page.locator('.player-topbar').boundingBox(), controlsBefore = await page.locator('.player-actions').boundingBox();
+  const lastSeatBefore = (await roster.locator('.roster-seat').last().boundingBox())!, flowBefore = (await flow.boundingBox())!;
+  const needsScroll = lastSeatBefore.y + lastSeatBefore.height > flowBefore.y + flowBefore.height;
   game.actorId = game.players[7].id;
   publish();
   await expect(roster.locator('.acting')).toContainText('Player 8');
-  await expect.poll(() => roster.evaluate(el => el.scrollLeft)).toBeGreaterThan(0);
+  if (needsScroll) await expect.poll(() => flow.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+  else expect(await flow.evaluate(el => el.scrollTop)).toBe(0);
   expect(await page.evaluate(() => window.scrollY)).toBe(scrollY);
-  const container = (await roster.boundingBox())!, actor = (await roster.locator('.acting').boundingBox())!;
-  expect(actor.x).toBeGreaterThanOrEqual(container.x);
-  expect(actor.x + actor.width).toBeLessThanOrEqual(container.x + container.width + 1);
+  const container = (await flow.boundingBox())!, actor = (await roster.locator('.acting').boundingBox())!;
+  expect(actor.y).toBeGreaterThanOrEqual(container.y);
+  expect(actor.y + actor.height).toBeLessThanOrEqual(container.y + container.height + 1);
+  expect(await page.locator('.player-topbar').boundingBox()).toEqual(topbarBefore);
+  expect(await page.locator('.player-actions').boundingBox()).toEqual(controlsBefore);
 });
 
 async function dragSeat(page: Page, from: number, to: number) {
@@ -563,4 +598,198 @@ test('in-app notices detect legal actions unlocking for the same actor and do no
   publish(); await expect(page.locator('.notice-turn')).toHaveCount(0);
   game.players[1].status = 'busted'; game.players[1].stack = 0; game.players[1].bustOrder = 1; publish();
   await expect(page.locator('.notice-bust.notice-urgent')).toContainText('Bob busted · finished #2');
+});
+
+for (const verb of ['Raise', 'Bet']) test(`${verb} and activity sheets trap focus, cancel, and close when play advances`, async ({ page }) => {
+  const lobby = createGame();
+  lobby.players = [createPlayer('alice', 'Alice', 0), createPlayer('bob', 'Bob', 1), createPlayer('cara', 'Cara', 2)];
+  const game = startTournament(lobby, lobby.config);
+  game.awaitingDeal = false;
+  if (verb === 'Bet') {
+    game.currentBet = 0;
+    game.players.forEach(player => { player.committedThisStreet = 0; });
+  }
+  game.log = Array.from({ length: 14 }, (_, id) => ({ id, text: `Table event ${id + 1}` }));
+  const snapshot: Snapshot = {
+    game, you: { id: game.actorId!, host: false, admin: false, dealing: false, legal: legalActions(game, game.actorId!) },
+    joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now(),
+  };
+  const actions: unknown[] = [];
+  let publish = () => {};
+  await page.routeWebSocket('**/ws', socket => {
+    publish = () => socket.send(JSON.stringify({ type: 'state', snapshot }));
+    socket.onMessage(raw => {
+      const message = JSON.parse(String(raw));
+      if (message.type === 'action') actions.push(message);
+      publish();
+    });
+  });
+  await page.setViewportSize({ width: 390, height: 667 });
+  await page.goto('/');
+  const opener = page.getByRole('button', { name: `Open ${verb} sizer`, exact: true });
+  await expect(page.getByLabel(`${verb} to`, { exact: true })).toHaveCount(0);
+  await opener.click();
+  const dialog = page.getByRole('dialog'), amount = dialog.getByLabel(`${verb} to`, { exact: true });
+  const cancel = dialog.getByRole('button', { name: 'Cancel', exact: true });
+  const confirm = dialog.getByRole('button', { name: `Confirm ${verb.toLowerCase()}`, exact: true });
+  await expect(amount).toBeFocused(); // Decrease is disabled at the minimum.
+  await page.keyboard.press('Shift+Tab');
+  await expect(cancel).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(amount).toBeFocused();
+  await dialog.getByRole('button', { name: 'Pot', exact: true }).click();
+  await expect(amount).toHaveValue(verb === 'Raise' ? '35' : '15');
+  await dialog.getByLabel('Bet size slider').fill('50');
+  await expect(amount).toHaveValue('50');
+  await expect(dialog.locator('.push-chips')).toContainText('2 × $25');
+  if (verb === 'Raise') await page.screenshot({ path: 'test-results/player-raise-sheet.png' });
+  await amount.fill('1');
+  await expect(confirm).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(opener).toBeFocused();
+  expect(actions).toHaveLength(0);
+  await opener.click();
+  await cancel.click();
+  await expect(opener).toBeFocused();
+  await opener.click();
+  game.revision++;
+  publish();
+  await expect(dialog).toHaveCount(0);
+  await opener.click();
+  await expect(amount).toHaveValue(String(snapshot.you.legal!.minRaiseTo));
+  await amount.fill('50');
+  await confirm.click();
+  await expect.poll(() => actions).toEqual([{ type: 'action', action: { type: verb.toLowerCase(), amount: 50 }, revision: game.revision }]);
+  await expect(dialog).toHaveCount(0);
+
+  await expect(page.locator('.hand-log-compact li')).toHaveText(['Table event 14', 'Table event 13']);
+  const activity = page.getByRole('button', { name: 'Expand table activity' });
+  await activity.click();
+  await expect(dialog.locator('li')).toHaveCount(12);
+  await expect(dialog.locator('li').last()).toHaveText('Table event 3');
+  const close = dialog.getByRole('button', { name: 'Close activity' });
+  await expect(close).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(close).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(close).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(activity).toBeFocused();
+  await activity.click();
+  await close.click();
+  await expect(dialog).toHaveCount(0);
+  await expect(activity).toBeFocused();
+  await activity.click();
+  game.revision++;
+  publish();
+  await expect(dialog).toHaveCount(0);
+  await expect(activity).toBeFocused();
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+});
+
+for (const phase of ['street-break', 'showdown'] as const) for (const sheet of ['activity', 'sizer', 'all-in'] as const) test(`${sheet} yields focus to the ${phase} dealer dialog`, async ({ page }) => {
+  const lobby = createGame();
+  lobby.players = [createPlayer('alice', 'Alice', 0), createPlayer('bob', 'Bob', 1), createPlayer('cara', 'Cara', 2)];
+  const game = startTournament(lobby, lobby.config);
+  game.awaitingDeal = false;
+  const snapshot: Snapshot = {
+    game, you: { id: game.actorId!, host: false, admin: false, dealing: true, legal: legalActions(game, game.actorId!) },
+    joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now(),
+  };
+  let publish = () => {};
+  await page.routeWebSocket('**/ws', socket => {
+    publish = () => socket.send(JSON.stringify({ type: 'state', snapshot }));
+    socket.onMessage(publish);
+  });
+  await page.setViewportSize({ width: 390, height: 667 });
+  await page.goto('/');
+  await page.getByRole('button', { name: sheet === 'activity' ? 'Expand table activity' : sheet === 'sizer' ? 'Open Raise sizer' : 'All in', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  game.phase = phase;
+  game.pendingStreet = 'flop';
+  game.actorId = null;
+  game.pots = [{ amount: 15, eligibleIds: game.players.map(player => player.id), awarded: false }];
+  game.revision++;
+  snapshot.you.legal = null;
+  publish();
+  const dealer = page.locator('.dealer-overlay');
+  await expect(page.locator('.activity-overlay,.sizer-overlay,.confirm-overlay')).toHaveCount(0);
+  await expect(dealer.getByRole('heading')).toContainText(phase === 'street-break' ? /Deal the\s*flop/ : 'Main pot');
+  const first = dealer.getByRole('button', { name: phase === 'street-break' ? /Cards dealt/ : 'Select winner Alice' });
+  await expect(first).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(dealer.getByRole('button', { name: phase === 'street-break' ? /Cards dealt/ : 'Select winner Cara' })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(first).toBeFocused();
+});
+
+test('board shows each commitment once and both views preserve all-in status', async ({ page }) => {
+  const game = createGame();
+  game.phase = 'betting';
+  game.players = [createPlayer('alice', 'Alice', 0), createPlayer('bob', 'Bob', 1), createPlayer('cara', 'Cara', 2)];
+  game.actorId = 'alice';
+  game.players[1].committedThisStreet = 25;
+  game.players[2].committedThisStreet = 500;
+  game.players[2].status = 'all-in';
+  game.players[2].stack = 0;
+  const snapshot: Snapshot = {
+    game, you: { id: 'alice', host: false, admin: false, dealing: false, legal: null },
+    joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now(),
+  };
+  await page.routeWebSocket('**/ws', socket => socket.onMessage(() => socket.send(JSON.stringify({ type: 'state', snapshot }))));
+  await page.goto('/board');
+  const bob = page.locator('.seat-card').filter({ has: page.locator('.seat-name', { hasText: 'Bob' }) });
+  const cara = page.locator('.seat-card').filter({ has: page.locator('.seat-name', { hasText: 'Cara' }) });
+  await expect(bob.locator('.seat-status')).toHaveText('In the hand');
+  await expect(bob.locator('.seat-bet')).toHaveText('In front $25');
+  await expect(cara.locator('.seat-status')).toHaveText('all in');
+  await expect(cara.locator('.seat-bet')).toHaveText('In front $500');
+  await page.goto('/');
+  await expect(page.locator('.roster-seat').filter({ hasText: 'Bob' }).locator('.roster-state')).toHaveText('In front $25');
+  await expect(page.locator('.roster-seat').filter({ hasText: 'Cara' }).locator('.roster-state')).toHaveText('all in');
+});
+
+for (const viewport of [{ width: 390, height: 400 }, { width: 844, height: 300 }]) test(`rebuy and controls remain reachable at ${viewport.width}x${viewport.height}, including enlarged text`, async ({ page }) => {
+  const game = createGame();
+  game.phase = 'hand-complete';
+  game.players = [createPlayer('alice', 'Alice', 0, 0), createPlayer('bob', 'Bob', 1), createPlayer('cara', 'Cara', 2)];
+  game.players[0].status = 'busted';
+  const snapshot: Snapshot = {
+    game, you: { id: 'alice', host: false, admin: false, dealing: true, legal: null },
+    joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now(),
+  };
+  const messages: unknown[] = [];
+  await page.routeWebSocket('**/ws', socket => socket.onMessage(raw => {
+    messages.push(JSON.parse(String(raw)));
+    socket.send(JSON.stringify({ type: 'state', snapshot }));
+  }));
+  await page.setViewportSize(viewport);
+  await page.goto('/');
+  const actions = page.locator('.player-actions');
+  const rebuy = actions.getByRole('button', { name: /Buy back in for/ });
+  const shell = page.locator('.player-shell');
+  // Scroll the same container a touch user can scroll, without auto-scrolling locators.
+  await shell.evaluate(el => { el.scrollTop = el.scrollHeight; });
+  await expect(rebuy).toBeInViewport({ ratio: 1 });
+  await expect(page.getByRole('region', { name: 'Your betting controls' })).toBeInViewport({ ratio: 1 });
+  await rebuy.click();
+  expect(messages).toContainEqual({ type: 'rebuy' });
+  // Double computed text sizes, including the app's explicit px sizes.
+  await page.evaluate(() => {
+    const elements = Array.from(document.querySelectorAll<HTMLElement>('.player-shell, .player-shell *'));
+    const sizes = elements.map(el => parseFloat(getComputedStyle(el).fontSize));
+    elements.forEach((el, i) => { el.style.fontSize = `${sizes[i] * 2}px`; });
+  });
+  const controls = [rebuy, actions.getByRole('button', { name: /Deal next hand/ }), actions.getByRole('button', { name: /Open .* sizer/ })];
+  for (const control of controls) {
+    await shell.evaluate((el, label) => {
+      const button = Array.from(el.querySelectorAll('button')).find(button => (button.getAttribute('aria-label') ?? button.textContent)?.includes(label));
+      if (button) el.scrollTop += button.getBoundingClientRect().top - el.getBoundingClientRect().top - 8;
+    }, await control.getAttribute('aria-label') ?? await control.innerText());
+    await expect(control).toBeInViewport({ ratio: 1 });
+  }
+  await shell.evaluate(el => { el.scrollTop = 0; });
+  await expect(page.locator('.player-header')).toBeInViewport({ ratio: 1 });
+  expect(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight)).toBe(true);
 });

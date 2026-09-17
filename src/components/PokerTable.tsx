@@ -1,8 +1,9 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { GameState, Player } from '../../shared/types';
 import { money } from '../../shared/chips';
 import { placeOf } from '../../shared/standings';
 import { ChipStack } from './Chips';
+import { useDialogFocus } from './useDialogFocus';
 import { useSeatDrag } from './useSeatDrag';
 
 export function blindClass(game: GameState, seat: number): string {
@@ -12,33 +13,34 @@ export function SeatMarkers({ game, seat }: { game: GameState; seat: number }) {
   return <span className="seat-markers">{game.button === seat && <i className="m-d" title="Dealer button">D</i>}{game.smallBlindSeat === seat && <i className="m-sb" title="Small blind">SB</i>}{game.bigBlindSeat === seat && <i className="m-bb" title="Big blind">BB</i>}</span>;
 }
 
+export function seatStatus(game: GameState, player: Player, showBet = false): string {
+  const place = placeOf(game, player);
+  return !player.connected ? 'Reconnecting…' : game.actorId === player.id ? 'Your action' : place ? `Finished #${place}` : player.status === 'folded' ? 'folded' : player.status === 'all-in' ? 'all in' : showBet && player.committedThisStreet > 0 ? `In front ${money(player.committedThisStreet)}` : player.status === 'active' ? 'In the hand' : player.status.replace('-', ' ');
+}
+
 export function SeatBadge({ player, game }: { player?: Player; game: GameState }) {
   if (!player) return <div className="seat-empty">Open seat</div>;
   const acting = game.actorId === player.id;
-  const place = placeOf(game, player);
   return <div className={`seat-card ${blindClass(game, player.seat)} ${acting ? 'seat-acting' : ''} ${!player.connected ? 'seat-offline' : ''} ${player.status === 'folded' || player.status === 'busted' ? 'seat-muted' : ''}`}>
     <div className="seat-top"><span className="seat-avatar">{player.name.slice(0, 1).toUpperCase()}</span><span className="seat-name">{player.name}</span><SeatMarkers game={game} seat={player.seat} /></div>
     <strong className="seat-stack">{money(player.stack)}</strong><div className="seat-chip-row"><ChipStack amount={player.stack} denominations={game.config.denominations} /></div>
-    <span className="seat-status">{!player.connected ? 'Reconnecting…' : acting ? 'Your action' : place ? `Finished #${place}` : player.status === 'active' ? 'In the hand' : player.status.replace('-', ' ')}</span>
+    <span className="seat-status">{seatStatus(game, player)}</span>
     {player.committedThisStreet > 0 && <div className="seat-bet">In front <b>{money(player.committedThisStreet)}</b></div>}
   </div>;
 }
 
 export function TableRoster({ game }: { game: GameState }) {
-  const rosterRef = useRef<HTMLDivElement>(null);
   const actorRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const roster = rosterRef.current, actor = actorRef.current;
-    if (!roster || !actor) return;
-    const rosterRect = roster.getBoundingClientRect(), actorRect = actor.getBoundingClientRect();
-    roster.scrollLeft += actorRect.left + actorRect.width / 2 - (rosterRect.left + roster.clientLeft + roster.clientWidth / 2);
+    actorRef.current?.scrollIntoView({ block: 'nearest' });
   }, [game.actorId]);
-  return <div ref={rosterRef} className="player-roster" aria-label="Players at the table">{[...game.players].sort((a, b) => a.seat - b.seat).map(p => {
+  return <div className="player-roster" aria-label="Players at the table">{[...game.players].sort((a, b) => a.seat - b.seat).map(p => {
     const acting = game.actorId === p.id;
     return <div ref={acting ? actorRef : undefined} key={p.id} className={`roster-seat ${blindClass(game, p.seat)} ${acting ? 'acting' : ''} ${p.status === 'folded' || p.status === 'busted' ? 'muted' : ''} ${!p.connected ? 'offline' : ''}`}>
       <span className="roster-avatar">{p.name.slice(0, 1).toUpperCase()}</span>
-      <div className="roster-info"><small>{p.name}</small><b>{money(p.stack)}</b></div>
+      <div className="roster-info"><small>{p.name}</small><span className="roster-state">{seatStatus(game, p, true)}</span></div>
       <SeatMarkers game={game} seat={p.seat} />
+      <b className="roster-stack">{money(p.stack)}</b>
     </div>;
   })}</div>;
 }
@@ -57,6 +59,25 @@ export function PokerTable({ game, compact = false, onMoveSeat }: { game: GameSt
   })}</div>{onMoveSeat && <div role="status" className="visually-hidden">{announcement}</div>}</div>;
 }
 
-export function HandLog({ game }: { game: GameState }) {
-  return <section className="game-panel hand-log"><div className="panel-heading"><span className="eyebrow">Table activity</span><span>Hand {game.hand}</span></div><ol>{game.log.slice(-12).reverse().map(entry => <li key={entry.id}>{entry.text}</li>)}</ol>{!game.log.length && <p className="muted">The story starts with the first hand.</p>}</section>;
+export function HandLog({ game, compact = false }: { game: GameState; compact?: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const blocking = game.awaitingDeal || game.phase === 'street-break' || (game.phase === 'showdown' && game.pots.some(pot => !pot.awarded));
+  const open = expanded && !blocking;
+  const dialogRef = useDialogFocus(open);
+  useEffect(() => { setExpanded(false); }, [game.revision, blocking]);
+  const entries = (count: number) => <ol>{game.log.slice(-count).reverse().map(entry => <li key={entry.id}>{entry.text}</li>)}</ol>;
+  const empty = !game.log.length && <p className="muted">The story starts with the first hand.</p>;
+  return <>
+    <section className={`game-panel hand-log${compact ? ' hand-log-compact' : ''}`}>
+      <div className="panel-heading"><span className="eyebrow">Table activity</span><span>Hand {game.hand}</span>{compact && <button type="button" className="activity-expand" aria-label="Expand table activity" aria-haspopup="dialog" onClick={() => setExpanded(true)}>▸</button>}</div>
+      {entries(compact ? 2 : 12)}{empty}
+    </section>
+    {compact && open && <div className="game-overlay activity-overlay" ref={dialogRef} tabIndex={-1} onKeyDown={e => { if (e.key === 'Escape') setExpanded(false); }} role="dialog" aria-modal="true" aria-labelledby="activity-title">
+      <section className="street-modal activity-sheet">
+        <div className="panel-heading"><h2 id="activity-title">Table activity</h2><span>Hand {game.hand}</span></div>
+        <div className="hand-log">{entries(12)}{empty}</div>
+        <button type="button" className="game-button wide" onClick={() => setExpanded(false)}>Close activity</button>
+      </section>
+    </div>}
+  </>;
 }
