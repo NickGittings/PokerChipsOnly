@@ -393,11 +393,11 @@ test('time limit shows the final hand and ranks surviving stacks on board and ph
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-test('player screen shows a vertical roster with turn, dealer, and blind markers below the pinned stack', async ({ page }) => {
+test('player screen shows a 2x2 roster with turn, dealer, and blind markers below the pinned stack', async ({ page }) => {
   const game = createGame();
   game.phase = 'betting';
-  game.players = [createPlayer('alice', 'Alice', 0, 500), createPlayer('bob', 'Bob', 1, 495), createPlayer('cara', 'Cara', 2, 490)];
-  game.button = 0; game.smallBlindSeat = 1; game.bigBlindSeat = 2; game.actorId = 'bob'; game.totalChips = 1485;
+  game.players = [createPlayer('alice', 'Alice', 0, 500), createPlayer('bob', 'Bob', 1, 495), createPlayer('cara', 'Cara', 2, 490), createPlayer('dan', 'Dan', 3, 500)];
+  game.button = 0; game.smallBlindSeat = 1; game.bigBlindSeat = 2; game.actorId = 'bob'; game.totalChips = 1985;
   const snapshot: Snapshot = {
     game, you: { id: 'alice', host: false, admin: false, dealing: false, legal: null },
     joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: false, serverTime: Date.now(),
@@ -408,7 +408,21 @@ test('player screen shows a vertical roster with turn, dealer, and blind markers
   await page.goto('/');
   const roster = page.locator('.player-roster'), seats = roster.locator('.roster-seat');
   await expect(roster).toBeVisible();
-  await expect(seats).toHaveCount(3);
+  await expect(seats).toHaveCount(4);
+  for (const width of [320, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    const boxes = await seats.evaluateAll(elements => elements.map(el => {
+      const { x, y, width, height } = el.getBoundingClientRect();
+      return { x, y, width, height };
+    }));
+    expect(boxes[0].y).toBe(boxes[1].y);
+    expect(boxes[2].y).toBe(boxes[3].y);
+    expect(boxes[2].y).toBeGreaterThanOrEqual(boxes[0].y + boxes[0].height);
+    expect(boxes[0].x).toBe(boxes[2].x);
+    expect(boxes[1].x).toBe(boxes[3].x);
+    expect(boxes[1].x).toBeGreaterThanOrEqual(boxes[0].x + boxes[0].width);
+    expect(await roster.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+  }
   await expect(seats.nth(0)).toContainText('Alice'); await expect(seats.nth(0).locator('.seat-markers')).toContainText('D');
   await expect(seats.nth(1)).toContainText('Bob'); await expect(seats.nth(1).locator('.seat-markers')).toContainText('SB'); await expect(seats.nth(1)).toHaveClass(/acting/);
   await expect(seats.nth(1)).toHaveClass(/seat-sb/);
@@ -425,7 +439,7 @@ test('player screen shows a vertical roster with turn, dealer, and blind markers
   await expect(seats.nth(2)).toHaveCSS('background-color', actingFill);
   expect(await seats.nth(1).evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe(actingFill);
   expect(await seats.nth(1).evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe(bigBlindFill);
-  game.players.push(createPlayer('dan', 'Dan', 3, 500), createPlayer('eve', 'Eve', 4, 500), createPlayer('fred', 'Fred', 5, 500));
+  game.players.push(createPlayer('eve', 'Eve', 4, 500), createPlayer('fred', 'Fred', 5, 500));
   game.log = [{ id: 1, text: 'Bob calls $10.' }, { id: 2, text: 'Cara checks.' }];
   publish();
   await expect(seats).toHaveCount(6);
