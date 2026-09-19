@@ -1,4 +1,4 @@
-import { expect, test, type Browser, type Page } from '@playwright/test';
+import { expect, test, type Browser, type Page, type WebSocketRoute } from '@playwright/test';
 import type { Snapshot } from '../shared/types';
 import { createGame, createPlayer, startTournament } from '../server/engine/state';
 import { legalActions } from '../server/engine/betting';
@@ -792,4 +792,362 @@ for (const viewport of [{ width: 390, height: 400 }, { width: 844, height: 300 }
   await shell.evaluate(el => { el.scrollTop = 0; });
   await expect(page.locator('.player-header')).toBeInViewport({ ratio: 1 });
   expect(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight)).toBe(true);
+});
+
+test('winning a pot shows a full-screen celebration only to the winner, ignores rebroadcasts and undo, and is tap-to-dismiss', async ({ page }) => {
+  const game = createGame();
+  game.phase = 'showdown'; game.hand = 1;
+  game.players = [createPlayer('alice', 'Alice', 0, 500), createPlayer('bob', 'Bob', 1, 480)];
+  game.pots = [{ amount: 20, eligibleIds: ['alice', 'bob'], awarded: false }];
+  const snapshot: Snapshot = {
+    game, you: { id: 'alice', host: false, admin: false, dealing: false, legal: null },
+    joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: true, serverTime: Date.now(),
+  };
+  let publish = () => {};
+  await page.routeWebSocket('**/ws', socket => { publish = () => socket.send(JSON.stringify({ type: 'state', snapshot })); socket.onMessage(publish); });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  const celebration = page.locator('.win-celebration');
+  await expect(page.locator('.player-header')).toContainText('Hand 1');
+  await expect(celebration).toHaveCount(0);
+
+  // Award the pot to Alice.
+  game.pots[0] = { ...game.pots[0], awarded: true, winnerIds: ['alice'] };
+  game.players[0].stack = 520;
+  publish();
+  await expect(celebration).toBeVisible();
+  await expect(celebration).toContainText('You won $20');
+  const src = await celebration.locator('img').getAttribute('src');
+  expect(src).toBeTruthy();
+
+  // The server rebroadcasts the same snapshot every second; it must not retrigger or reshuffle the image.
+  publish();
+  await expect(celebration).toBeVisible();
+  expect(await celebration.locator('img').getAttribute('src')).toBe(src);
+
+  // Tap anywhere to dismiss.
+  await celebration.click();
+  await expect(celebration).toHaveCount(0);
+
+  // Undo (awarded → unawarded) must not show a celebration; a fresh award fires again.
+  game.pots[0] = { ...game.pots[0], awarded: false, winnerIds: undefined };
+  game.players[0].stack = 500;
+  publish();
+  await expect(page.locator('.your-stack-balance strong')).toHaveText('$500'); // Let the undo frame commit before re-awarding, or React may batch the two and skip the edge.
+  await expect(celebration).toHaveCount(0);
+  game.pots[0] = { ...game.pots[0], awarded: true, winnerIds: ['alice'] };
+  game.players[0].stack = 520;
+  publish();
+  await expect(celebration).toBeVisible();
+
+  // An eligible player who did NOT win never shows a celebration for someone else's win.
+  game.hand = 2;
+  game.pots = [{ amount: 25, eligibleIds: ['alice', 'bob'], awarded: false }];
+  snapshot.you = { id: 'bob', host: false, admin: false, dealing: false, legal: null };
+  await page.goto('/'); // Fresh load establishes bob's baseline at the unawarded pot.
+  await expect(page.locator('.player-header')).toContainText('Hand 2');
+  game.pots[0] = { ...game.pots[0], awarded: true, winnerIds: ['alice'] };
+  game.players[1].stack = 475;
+  publish();
+  await expect(page.locator('.your-stack-balance strong')).toHaveText('$475');
+  await expect(celebration).toHaveCount(0);
+
+  // A new award edge for the same viewer proves the socket and detector are active.
+  game.pots[0] = { ...game.pots[0], awarded: false, winnerIds: undefined };
+  publish();
+  await expect(page.locator('.dealer-overlay')).toBeVisible();
+  game.pots[0] = { ...game.pots[0], awarded: true, winnerIds: ['bob'] };
+  publish();
+  await expect(celebration).toContainText('You won $25');
+});
+
+test('an uncontested win (pots array replaced wholesale) and a split pot both trigger the celebration correctly', async ({ page }) => {
+  const game = createGame();
+  game.phase = 'showdown'; game.hand = 1;
+  game.players = [createPlayer('alice', 'Alice', 0, 480), createPlayer('bob', 'Bob', 1, 500), createPlayer('cara', 'Cara', 2, 500)];
+  game.pots = [{ amount: 20, eligibleIds: ['alice', 'bob'], awarded: false }, { amount: 15, eligibleIds: ['alice'], awarded: false }];
+  const snapshot: Snapshot = {
+    game, you: { id: 'bob', host: false, admin: false, dealing: false, legal: null },
+    joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now(),
+  };
+  let publish = () => {};
+  await page.routeWebSocket('**/ws', socket => { publish = () => socket.send(JSON.stringify({ type: 'state', snapshot })); socket.onMessage(publish); });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  const celebration = page.locator('.win-celebration');
+  await expect(page.locator('.player-header')).toContainText('Hand 1'); // Let the initial join/state exchange settle before mutating.
+
+  // Uncontested win: betting.ts replaces the whole pots array in one update rather than mutating an entry.
+  game.pots = [{ amount: 35, eligibleIds: ['bob'], awarded: true, winnerIds: ['bob'] }];
+  game.players[1].stack = 535;
+  publish();
+  await expect(celebration).toContainText('You won $35');
+  await celebration.click();
+
+  // A split pot reports the chips this winner actually receives.
+  game.hand = 2;
+  game.pots = [{ amount: 40, eligibleIds: ['bob', 'cara'], awarded: false }];
+  publish();
+  await expect(page.locator('.player-header')).toContainText('Hand 2'); // Let this frame commit before the next publish, or React may batch the two and skip the edge.
+  await expect(celebration).toHaveCount(0);
+  game.pots[0] = { ...game.pots[0], awarded: true, winnerIds: ['bob', 'cara'] };
+  publish();
+  await expect(celebration).toContainText('You won $20!');
+});
+
+test('winning the final pot of the tournament still shows the celebration on the game-over screen', async ({ page }) => {
+  const game = createGame();
+  game.phase = 'tournament-over'; game.hand = 5;
+  game.players = [createPlayer('alice', 'Alice', 0, 1000), createPlayer('bob', 'Bob', 1, 0)];
+  game.players[1].status = 'busted'; game.players[1].bustOrder = 1;
+  game.pots = [{ amount: 40, eligibleIds: ['alice', 'bob'], awarded: false }];
+  const snapshot: Snapshot = {
+    game, you: { id: 'alice', host: false, admin: false, dealing: false, legal: null },
+    joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: true, serverTime: Date.now(),
+  };
+  let publish = () => {};
+  await page.routeWebSocket('**/ws', socket => { publish = () => socket.send(JSON.stringify({ type: 'state', snapshot })); socket.onMessage(publish); });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await expect(page.locator('.game-over')).toBeVisible();
+  game.pots[0] = { ...game.pots[0], awarded: true, winnerIds: ['alice'] };
+  game.players[0].stack = 1040;
+  publish();
+  await expect(page.locator('.win-celebration')).toContainText('You won $40');
+});
+
+async function celebrationTable(page: Page, dealing = false, amounts = [100, 40]) {
+  const game = createGame();
+  game.phase = 'showdown'; game.hand = 1; game.button = 0;
+  game.config.denominations = [{ value: 5, color: '#fff' }];
+  game.players = [createPlayer('alice', 'Alice', 0, 500), createPlayer('bob', 'Bob', 1, 500)];
+  game.pots = amounts.map(amount => ({ amount, eligibleIds: ['alice', 'bob'], awarded: false }));
+  const snapshot: Snapshot = {
+    game, you: { id: 'alice', host: false, admin: false, dealing, legal: null },
+    joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: true, serverTime: Date.now(),
+  };
+  let socket: WebSocketRoute;
+  const messages: { type: string; potIndex?: number }[] = [];
+  await page.routeWebSocket('**/ws', ws => {
+    socket = ws;
+    ws.onMessage(message => {
+      messages.push(JSON.parse(String(message)));
+      ws.send(JSON.stringify({ type: 'state', snapshot }));
+    });
+  });
+  await page.goto('/');
+  await expect(page.locator('.player-header')).toContainText('Hand 1');
+  let update = 0;
+  return {
+    game, snapshot, messages,
+    disconnect: () => socket.close(),
+    error: (message: string) => socket.send(JSON.stringify({ type: 'error', message })),
+    publish: async () => {
+      game.config.name = `Update ${++update}`;
+      socket.send(JSON.stringify({ type: 'state', snapshot }));
+      // A positive render assertion ensures absence checks observe this update.
+      await expect(page.locator('.player-header-name')).toHaveText(game.config.name);
+    },
+  };
+}
+
+test('celebration suppresses reconnect awards and still celebrates the next live win', async ({ page }) => {
+  const { game, disconnect, publish } = await celebrationTable(page, false, [100]);
+  await disconnect();
+  await expect(page.locator('.connection-indicator')).toHaveText('Offline');
+  game.pots[0].awarded = true; game.pots[0].winnerIds = ['alice'];
+  await expect(page.locator('.connection-indicator')).toHaveText('Live');
+  await expect(page.locator('.dealer-overlay')).toHaveCount(0);
+  await expect(page.locator('.win-celebration')).toHaveCount(0);
+  game.hand++;
+  game.pots[0].awarded = false;
+  await publish();
+  game.pots[0].awarded = true;
+  await publish();
+  await expect(page.locator('.win-celebration')).toContainText('You won $100!');
+});
+
+for (const split of [false, true]) test(`celebration aggregates simultaneous pots with correct ${split ? 'mixed split and odd-chip' : 'sole-winner'} payouts`, async ({ page }) => {
+  const { game, publish } = await celebrationTable(page, false, [split ? 105 : 100, 40]);
+  game.pots[0].awarded = true; game.pots[0].winnerIds = split ? ['alice', 'bob'] : ['alice'];
+  game.pots[1].awarded = true; game.pots[1].winnerIds = ['alice'];
+  await publish();
+  // Bob is left of the button and receives the odd $5 chip: Alice gets $50 + $40.
+  await expect(page.locator('.win-celebration strong')).toHaveText(`You won $${split ? 90 : 140}!`);
+});
+
+for (const dealing of [true, false]) test(`celebration waits for all pots on the ${dealing ? 'dealer' : 'waiting player'} screen and traps keyboard focus`, async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-01-01T00:00:00') });
+  await page.clock.pauseAt(new Date('2026-01-01T00:00:01'));
+  const { game, messages, publish } = await celebrationTable(page, dealing);
+  game.pots[0].awarded = true; game.pots[0].winnerIds = ['alice'];
+  await publish();
+  const dealer = page.locator('.dealer-overlay');
+  await expect(dealer).toContainText('Side pot 1');
+  await expect(page.locator('.win-celebration')).toHaveCount(0);
+  if (dealing) {
+    await dealer.getByRole('button', { name: 'Select winner Alice' }).click();
+    await dealer.getByRole('button', { name: /Award pot/ }).click();
+    await expect.poll(() => messages.filter(message => message.type === 'awardPot')).toEqual([{ type: 'awardPot', potIndex: 1, winnerIds: ['alice'], revision: 0 }]);
+  }
+  // Wait longer than the display duration, with the usual socket heartbeats.
+  for (let i = 0; i < 4; i++) { await page.clock.runFor(3000); await publish(); }
+  game.pots[1].awarded = true; game.pots[1].winnerIds = ['alice'];
+  game.phase = 'hand-complete';
+  await publish();
+  const celebration = page.getByRole('dialog', { name: 'You won $140!' });
+  const dismiss = celebration.getByRole('button', { name: 'Dismiss celebration' });
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  await expect(dismiss).toBeFocused();
+  const controls = celebration.getByRole('button');
+  for (let index = 1; index < await controls.count(); index++) {
+    await page.keyboard.press('Tab');
+    await expect(controls.nth(index)).toBeFocused();
+  }
+  await page.keyboard.press('Tab');
+  await expect(dismiss).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(controls.last()).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(dismiss).toBeFocused();
+  await page.clock.runFor(3400);
+  await expect(celebration).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(celebration).toHaveCount(0);
+  await publish();
+  await expect(celebration).toHaveCount(0);
+});
+
+for (const reset of ['undo', 'new hand', 'disconnect'] as const) test(`celebration drops pending wins after ${reset}`, async ({ page }) => {
+  const { game, publish, disconnect } = await celebrationTable(page);
+  game.pots[0].awarded = true; game.pots[0].winnerIds = ['alice'];
+  await publish();
+  await expect(page.locator('.win-celebration')).toHaveCount(0);
+  if (reset === 'disconnect') {
+    await disconnect();
+    await expect(page.locator('.connection-indicator')).toHaveText('Offline');
+    await expect(page.locator('.connection-indicator')).toHaveText('Live');
+  } else {
+    if (reset === 'new hand') game.hand++;
+    game.pots[0].awarded = false;
+    await publish();
+    game.pots[0].awarded = true; game.pots[0].winnerIds = ['bob'];
+  }
+  game.pots[1].awarded = true; game.pots[1].winnerIds = ['bob'];
+  await publish();
+  await expect(page.locator('.dealer-overlay')).toHaveCount(0);
+  await expect(page.locator('.win-celebration')).toHaveCount(0);
+});
+
+test('celebration resets a failed image on replacement, restores focus, and expires without replaying', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-01-01T00:00:00') });
+  await page.clock.pauseAt(new Date('2026-01-01T00:00:01'));
+  const { game, publish } = await celebrationTable(page, true, [100]);
+  game.phase = 'hand-complete';
+  await publish();
+  const nextHand = page.getByRole('button', { name: 'Deal next hand' });
+  await nextHand.focus();
+  game.pots[0].awarded = true; game.pots[0].winnerIds = ['alice'];
+  await publish();
+  const celebration = page.locator('.win-celebration');
+  await celebration.locator('img').evaluate(img => img.dispatchEvent(new Event('error')));
+  await expect(celebration.locator('img')).toBeHidden();
+  game.pots[0].awarded = false;
+  await publish();
+  game.pots[0].awarded = true;
+  await publish();
+  await expect(celebration.locator('img')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(celebration).toHaveCount(0);
+  await expect(nextHand).toBeFocused();
+  game.pots[0].awarded = false;
+  await publish();
+  game.pots[0].awarded = true;
+  await publish();
+  for (let i = 0; i < 3; i++) {
+    await page.clock.runFor(3000);
+    await publish();
+    await expect(celebration).toBeVisible();
+  }
+  await page.clock.runFor(1100);
+  await expect(celebration).toHaveCount(0);
+  await expect(page.locator('.connection-indicator')).toHaveText('Live');
+  await publish();
+  await expect(celebration).toHaveCount(0);
+});
+
+for (const phase of ['hand-complete', 'tournament-over'] as const) test(`alerts remain above the celebration and accessible in ${phase}`, async ({ page }) => {
+  const { game, publish, error } = await celebrationTable(page, false, [100]);
+  game.phase = phase;
+  game.pots[0].awarded = true; game.pots[0].winnerIds = ['alice'];
+  game.players[0].stack = 600;
+  game.players[1].stack = 0; game.players[1].status = 'busted'; game.players[1].bustOrder = 1;
+  await publish();
+  const celebration = page.getByRole('dialog', { name: 'You won $100!' });
+  const dismiss = celebration.getByRole('button', { name: 'Dismiss celebration' });
+  const toast = celebration.locator('.notice-bust');
+  await expect(celebration).toBeVisible();
+  await expect(toast).toContainText('Bob busted · finished #2');
+  // Visibility alone does not detect a toast hidden behind the backdrop.
+  await expect.poll(() => toast.evaluate(el => {
+    const box = el.getBoundingClientRect();
+    return el.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+  })).toBe(true);
+  await page.keyboard.press('Tab');
+  await expect(toast.getByRole('button')).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(toast).toHaveCount(0);
+  await expect(dismiss).toBeFocused();
+  await expect(celebration).toBeVisible();
+
+  error('Test table error');
+  const banner = celebration.getByRole('alert');
+  await expect(banner).toContainText('Test table error');
+  await expect.poll(() => banner.evaluate(el => {
+    const box = el.getBoundingClientRect();
+    return el.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+  })).toBe(true);
+  await page.keyboard.press('Tab');
+  await expect(banner.getByRole('button')).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(dismiss).toBeFocused();
+  await banner.getByRole('button').click();
+  await expect(banner).toHaveCount(0);
+  await expect(celebration).toBeVisible();
+
+  // Alerts return to the app when the celebration closes.
+  error('Error survives celebration dismissal');
+  await expect(banner).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(celebration).toHaveCount(0);
+  await expect(page.getByRole('alert')).toContainText('Error survives celebration dismissal');
+  await page.getByRole('button', { name: 'Dismiss error' }).click();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+for (const rollback of ['removed pot', 'unawarded pot', 'different winner'] as const) test(`undo dismisses an active uncontested celebration after ${rollback}`, async ({ page }) => {
+  const { game, publish } = await celebrationTable(page, false, []);
+  game.phase = 'betting';
+  await publish();
+  game.phase = 'hand-complete';
+  game.pots = [{ amount: 100, eligibleIds: ['alice'], awarded: true, winnerIds: ['alice'] }];
+  await publish();
+  const celebration = page.locator('.win-celebration');
+  await expect(celebration).toContainText('You won $100!');
+  game.phase = 'betting';
+  if (rollback === 'removed pot') game.pots = [];
+  else if (rollback === 'unawarded pot') game.pots[0].awarded = false;
+  else game.pots[0].winnerIds = ['bob'];
+  await publish();
+  await expect(page.locator('.dealer-overlay')).toHaveCount(0);
+  await expect(celebration).toHaveCount(0);
+  await publish();
+  await expect(celebration).toHaveCount(0);
+  // A fresh award after the rollback can still celebrate.
+  game.pots = [];
+  await publish();
+  game.phase = 'hand-complete';
+  game.pots = [{ amount: 100, eligibleIds: ['alice'], awarded: true, winnerIds: ['alice'] }];
+  await publish();
+  await expect(celebration).toContainText('You won $100!');
 });

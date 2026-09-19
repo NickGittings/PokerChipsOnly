@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { ClientMsg, Snapshot } from '../../shared/types';
+import type { ClientMsg, GameState, Snapshot } from '../../shared/types';
 import { money } from '../../shared/chips';
 import { dealerName } from '../../shared/dealer';
 import { NightReport } from './NightReport';
@@ -10,9 +10,12 @@ import { useDialogFocus } from './useDialogFocus';
 
 type Props = { snapshot: Snapshot; send: (msg: ClientMsg) => void; connected: boolean; dealer?: boolean };
 
+export const streetModalOpen = (game: GameState) => game.awaitingDeal || game.phase === 'street-break';
+export const showdownModalOpen = (game: GameState) => game.phase === 'showdown' && game.pots.some(pot => !pot.awarded);
+
 export function StreetModal({ snapshot, send, connected, dealer = false }: Props) {
   const { game } = snapshot;
-  const open = game.awaitingDeal || game.phase === 'street-break';
+  const open = streetModalOpen(game);
   const dialogRef = useDialogFocus(open);
   if (!open) return null;
   const dealtBy = dealerName(game);
@@ -24,10 +27,11 @@ export function StreetModal({ snapshot, send, connected, dealer = false }: Props
 export function ShowdownModal({ snapshot, send, connected, dealer = false }: Props) {
   const { game } = snapshot;
   const potIndex = game.pots.findIndex(pot => !pot.awarded);
-  const dialogRef = useDialogFocus(game.phase === 'showdown' && potIndex >= 0);
+  const open = showdownModalOpen(game);
+  const dialogRef = useDialogFocus(open);
   const [winnerIds, setWinnerIds] = useState<string[]>([]);
   useEffect(() => setWinnerIds([]), [potIndex, game.hand, game.revision]);
-  if (game.phase !== 'showdown' || potIndex < 0) return null;
+  if (!open) return null;
   const pot = game.pots[potIndex];
   const dealtBy = dealerName(game);
   return <div className="game-overlay dealer-overlay" ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="showdown-title"><section className="street-modal showdown-modal"><span className="eyebrow">Showdown · pot {potIndex + 1} of {game.pots.length}</span><h1 id="showdown-title">{potIndex === 0 ? 'Main pot' : `Side pot ${potIndex}`}</h1><strong className="showdown-amount">{money(pot.amount)}</strong><ChipStack amount={pot.amount} denominations={game.config.denominations} /><p>{dealer ? 'Read the real cards, then choose the winner. Select more than one player to split.' : `Waiting for ${dealtBy} to confirm the winner of this pot.`}</p><div className="winner-options">{pot.eligibleIds.map(id => { const player = game.players.find(p => p.id === id); return <button className={`winner-option ${winnerIds.includes(id) ? 'selected' : ''}`} disabled={!dealer || !connected} key={id} aria-label={`Select winner ${player?.name ?? "Player"}`} onClick={() => setWinnerIds(ids => ids.includes(id) ? ids.filter(i => i !== id) : [...ids, id])}><span className="seat-avatar">{player?.name.slice(0, 1)}</span><span>{player?.name ?? 'Player'}</span><span className="winner-check">{winnerIds.includes(id) ? '✓' : '○'}</span></button>; })}</div>{dealer && <button className="game-button primary wide" disabled={!connected || !winnerIds.length} onClick={() => send({ type: 'awardPot', potIndex, winnerIds, revision: game.revision })}>{winnerIds.length > 1 ? `Split pot ${winnerIds.length} ways` : 'Award pot'} <span>→</span></button>}<small>Only players eligible for this pot are shown.</small></section></div>;

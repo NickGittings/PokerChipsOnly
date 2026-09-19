@@ -7,3 +7,6 @@ dist/
 test-results/
 playwright-report/
 coverage/
+
+# Local-only win celebration images (not committed; see useWinCelebration.ts glob)
+src/assets/wins/*
