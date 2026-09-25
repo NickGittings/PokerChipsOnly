@@ -1,0 +1,155 @@
+# Native app plan: PokerChips Only on iOS, then Android
+
+> Copied from the planning session on 2026-09-20 so it lives with the code. Update this file as stages complete; add new decisions to `docs/decisions/` rather than rewriting history here.
+
+## Context
+
+Today the app is a LAN web app: an authoritative Node/Express + `ws` server on a laptop (`npm start`), with phones as browser clients on `http://192.168.x.x:3000`. Every game night starts with opening a terminal.
+
+The goal is a real iOS app (Android later) that eventually removes the laptop entirely. The business constraint decides the architecture: a **one-time purchase** can't carry an ongoing server bill, so the endgame is **the host's phone runs the game over LAN** — no cloud, no subscription, no accounts. Sequencing is groundwork-first: Stage 1 ships a sideloadable iOS app against the existing laptop server, because every piece of it is required by the endgame anyway.
+
+### On the Android/iOS compatibility worry
+
+The wire protocol is plain JSON over one WebSocket (`shared/types.ts`). An Android phone joining an iPhone-hosted table is an ordinary WebSocket client — there is nothing platform-specific about it. Only two things get written twice (Swift + Kotlin) behind one shared TypeScript interface: the LAN listener and mDNS discovery. And because the embedded host server also serves the built `dist/`, **any device with a browser can join an iPhone-hosted table** — so Android players work before an Android app exists.
+
+### What the audit found (this is why the endgame is affordable)
+
+- `shared/*` and `server/engine/*` contain **zero** `node:` imports — they already run unchanged in a WebView.
+- All Node coupling in the game layer is confined to `server/room.ts`: `node:crypto` randomUUID (2 sites), `node:fs` persistence (4 sites across 2 methods), and the `ws` `WebSocket` type (5 sites, using only `.readyState` and `.send`). Roughly 30 lines to abstract.
+- The client's entire server coupling is **one line**: `src/net/useGameSocket.ts:24` builds the socket URL from `location.host`.
+- Already mobile-ready: `viewport-fit=cover`, 20 `env(safe-area-inset-*)` uses, `100dvh`, height breakpoints, `touch-action:manipulation`, and a solid reconnect story (backoff + 4s stale watchdog + `visibilitychange` wake) in `useGameSocket.ts`.
+- Not ready: pushState routing depends on the server's `app.get('*')` rewrite; `navigator.vibrate` is a no-op in WKWebView; no icons, splash, or manifest exist at all.
+
+### Environment
+
+Xcode 27 + iOS 26.5 simulators are installed. **CocoaPods is missing** — install via `brew install cocoapods` (system Ruby 2.6 is too old for a gem install). For Stage 4, the Android SDK is at `~/Library/Android/sdk` but **no JDK is installed** (`java -version` fails) — install Android Studio for its bundled JDK.
+
+---
+
+## Stage 0 — Project notes scaffolding ✅
+
+`CLAUDE.md` and this `docs/` folder. Done as the first step so the rest of the plan has somewhere durable to live.
+
+---
+
+## Stage 1 — Capacitor iOS shell, still using the laptop server
+
+Outcome: a sideloaded iOS app that plays a full game night. The laptop still runs `npm start`.
+
+**1.1 Tooling.** `npm i @capacitor/core @capacitor/ios` + `npm i -D @capacitor/cli`. `capacitor.config.ts` with `webDir: 'dist'`, `appId: 'com.nickgittings.pokerchipsonly'`, `ios: { contentInset: 'never', backgroundColor: '#0B2517' }`. Commit `ios/`, gitignore `ios/App/Pods`. No Vite `base` change is needed — Capacitor serves `webDir` at the root of `capacitor://localhost`, so the existing absolute `/assets/...` paths resolve; verify on first run.
+
+**1.2 Decouple the server address** — the one real client change. New `src/net/serverOrigin.ts` resolving the base origin: `location.origin` on web (behavior unchanged), a stored value on native (`@capacitor/preferences`, key `poker-server`, null until paired). Change `src/net/useGameSocket.ts:24` from `location.host` to a helper mapping `http://host:port` → `ws://host:port/ws` (and `https`→`wss`). **Leave the backoff, watchdog, and visibility logic exactly as-is** — it is already the right behavior for a sleeping phone.
+
+**1.3 Routing without a server rewrite.** `capacitor://localhost/board` has no `app.get('*')` behind it, so a reload would 404. Add a `useRoute()` hook returning `{ route, navigate }` — history-backed on web, in-app state on native (persisted in Preferences). The click-delegation handler in `src/App.tsx:18-25` calls `navigate()` instead of `history.pushState`. Drop the dead `/play` entry from the whitelist at `App.tsx:23`.
+
+**1.4 Pairing.** Add `@capacitor-mlkit/barcode-scanning`. On native, when no server is stored, show a "Connect to a table" screen: **Scan QR** (reads the board's existing `snapshot.joinUrl` QR — zero server changes) plus a manual-address fallback and a "Change table" action. Needs `NSCameraUsageDescription`.
+
+**1.5 iOS networking permissions** — the most common "works in Simulator, fails on device" trap:
+- `NSAppTransportSecurity` → `NSAllowsLocalNetworking: true`, required for cleartext `http://192.168.*` and `ws://`.
+- `NSLocalNetworkUsageDescription` — iOS 14+ prompts before *any* LAN traffic; without it the socket fails silently.
+
+**1.6 Native shims.**
+- `@capacitor/haptics` behind a new `src/net/haptics.ts`; swap the 2 `navigator.vibrate` sites (`useNotifications.ts:47`, `useWinCelebration.ts:58`). Map the existing intent: turn/deal → `impact(Light)`, bust → `notification(Warning)`, win → `notification(Success)`.
+- `@capacitor-community/keep-awake` replacing the Wake Lock block at `src/App.tsx:31-36`; keep Wake Lock on web.
+- `@capacitor/app` — wire `appStateChange` alongside the existing `visibilitychange` listeners in `useGameSocket.ts` and `useNotifications.ts`.
+- `@capacitor/preferences` for the three storage keys (`poker-device`, `poker-name`, `poker-setup`). `poker-device` is the de-facto auth credential and WKWebView `localStorage` can be evicted under storage pressure.
+- Gate the `document.title` flashing (`useNotifications.ts:50-56`) to web — meaningless on native.
+- `@capacitor/status-bar` for the dark bar; portrait-lock the phone app.
+
+**1.7 Identity.** Generate icon + splash with `@capacitor/assets` (felt `#0B2517` + gold chip). Nothing exists today.
+
+---
+
+## Stage 2 — Explicit host role
+
+`server/room.ts:62` and `:99` compute `admin = peer.board` — admin is a *URL*, not a person. The endgame needs a host device. `Room` already persists `hostToken` and already ships `you.host` in the snapshot; it just isn't wired to permissions.
+
+- `admin = peer.token === this.hostToken || peer.board`, with the `peer.board` half behind a room setting so a phone host can be sole admin.
+- Add `claimHost` / `transferHost` to `ClientMsg` in `shared/types.ts`; `HostPanel` reads the existing `you.host`.
+- `disconnect()` at `room.ts:68` currently hands `hostToken` to an arbitrary remaining peer. Make that deliberate: reserve the host's token for reconnect instead.
+- Extend the permission cases in `server/room.test.ts`.
+
+This is a server-side change that improves the web app too.
+
+---
+
+## Stage 3 — Host the game on the phone
+
+**3.1 Make `Room` platform-free** (verified small):
+- `randomUUID` (`room.ts:44,92`) → `crypto.randomUUID()`. Verify it resolves under `capacitor://localhost` (a secure context in WKWebView); `structuredClone` is used heavily throughout `room.ts` and should be spot-checked at the same time.
+- `node:fs` (`room.ts:28-29,52-53`) → a `Storage` interface `{ read(): string | null; write(s: string): void }`. The Node adapter keeps the atomic `.tmp` + `renameSync`; the native adapter uses `@capacitor/filesystem`.
+- `ws` `WebSocket` (`room.ts:21,55,66,83`) → a `Conn` interface `{ id: string; open: boolean; send(data: string): void }`, with `peers` keyed on `Conn`. Mechanical — only `.readyState` and `.send` are used.
+
+`server/index.ts` keeps the Node adapter so `npm start` and the Playwright suite keep working unchanged.
+
+**3.2 `LanServer` Capacitor plugin** — the only genuinely new native code. One TS interface, two native implementations:
+
+```ts
+start(opts: { port: number; serviceName: string }): Promise<{ urls: string[] }>
+stop(): Promise<void>
+send(opts: { connectionId: string; data: string }): Promise<void>
+// events: 'connection' {id} | 'message' {id, data} | 'close' {id}
+```
+
+It must serve **both** static HTTP (the built `dist/`) and WebSocket on `/ws` — that's what lets browsers and non-app devices join. iOS: evaluate **Telegraph** (Swift, HTTP + WS in one server) first; `Network.framework` `NWListener` with `NWProtocolWebSocket` is the dependency-free fallback but needs static HTTP hand-written. Advertise Bonjour `_pokerchips._tcp` and expose `browse()` so joiners skip typing an IP, with the Stage 1 QR as fallback. Add `NSBonjourServices` to Info.plist.
+
+**3.3 Host UX.** A "Host a table" / "Join a table" first-run choice. On the host device: keep-awake on and a persistent "You're hosting — keep this app open" banner. The existing LAN-address logic in `server/joinUrls.ts` is replaced by the plugin's reported interface addresses, so the admin URL picker in `JoinQr.tsx` keeps working.
+
+> **Accepted constraint:** iOS suspends backgrounded apps. If the host locks their phone or takes a call, the table stalls until they return. Keep-awake and host handoff mitigate it; it does not go away. This is the price of having no server, and it is the one thing the laptop model does better.
+
+---
+
+## Stage 4 — Android
+
+- `npm i @capacitor/android && npx cap add android`. Same web bundle — **no UI work**.
+- Kotlin `LanServer` against the identical TS interface: Ktor or NanoHTTPD (both do HTTP + WS), `NsdManager` for mDNS.
+- `network_security_config.xml` permitting cleartext on local subnets.
+- Android 14+ needs a foreground service to keep the listener alive while hosting — the one place Android beats iOS here.
+
+---
+
+## Files that change
+
+| File | Stage | Change |
+|---|---|---|
+| `CLAUDE.md`, `docs/` *(new)* | 0 | contributor notes, architecture, decision records |
+| `src/net/useGameSocket.ts` | 1 | line 24: `location.host` → resolved server origin |
+| `src/net/serverOrigin.ts` *(new)* | 1 | web/native origin resolution + `ws://` mapping |
+| `src/App.tsx` | 1 | `useRoute()` instead of pathname; keep-awake swap at 31-36 |
+| `src/net/haptics.ts` *(new)* | 1 | `navigator.vibrate` → Haptics |
+| `src/net/useNotifications.ts`, `useWinCelebration.ts` | 1 | haptics call sites; gate title-flash to web |
+| `capacitor.config.ts`, `ios/App/App/Info.plist` *(new)* | 1 | config, ATS, local-network, camera, Bonjour |
+| `server/room.ts` | 2, 3 | host-based `admin`; extract crypto/fs/ws behind interfaces |
+| `shared/types.ts` | 2 | `claimHost` / `transferHost` messages |
+| `server/index.ts` | 3 | becomes the Node adapter for the new interfaces |
+| `plugins/lan-server/` *(new)* | 3, 4 | TS interface + Swift, later Kotlin |
+
+---
+
+## Distribution note
+
+`src/assets/wins/*` is eagerly bundled into every build by `import.meta.glob` at `src/net/useWinCelebration.ts:7`. The current contents will not pass App Store or Play review. The folder is already gitignored, so this is a build-time include decision — point the glob at a shippable default set for store builds and keep a separate path if you want the current behavior at your own table. Worth settling before paying for a developer account.
+
+---
+
+## Verification
+
+**After Stage 1**
+1. `npm test && npm run build && npm run test:browser` — the web path must be **unchanged**; this is the regression gate for every stage.
+2. `npx cap sync ios && npx cap open ios`; run on Simulator against the Mac's LAN IP.
+3. On a real iPhone over Wi-Fi: accept the local-network prompt, scan the board QR, claim a seat, play a hand.
+4. Lock the phone mid-hand, wait for the server to mark it disconnected, unlock — confirm the seat is reclaimed and the dealer prompt returns (this exercises the backoff + watchdog path).
+5. Force-quit and relaunch — confirm the stored `poker-device` token still reclaims the same seat.
+
+**After Stage 2**
+6. `npm test` with the extended `server/room.test.ts` permission cases. On the web app, confirm a non-host `/board` tab can no longer undo when the host-only setting is on.
+
+**After Stage 3**
+7. One iPhone hosts; a second iPhone app, an Android browser, and a laptop browser all join and play a full hand including a side pot — verify chip conservation on every screen.
+8. Force-quit the host app mid-hand and relaunch — the tournament, ledger, blind level, and pending deal prompt must survive via Filesystem persistence, matching the existing `.state.json` recovery behavior.
+9. Confirm Bonjour discovery finds the host with no IP typed, and that the QR fallback still works.
+
+**After Stage 4**
+10. Repeat 7 and 8 with an Android device hosting and an iPhone joining.
+
+Then walk the 8-step hardware smoke test already written in `README.md` (lines 81-91) on the native app — it is a better acceptance script than anything I'd write fresh.
