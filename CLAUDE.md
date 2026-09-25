@@ -20,12 +20,15 @@ npm start             # build + serve everything from :3000 (what game night act
 npm test              # vitest — server/**/*.test.ts + shared/**/*.test.ts
 npm run test:browser  # Playwright multi-device E2E (isolated server on :3301)
 npm run check          # test + build
+npm run build && npx cap sync ios && npx cap open ios   # iOS shell: rebuild the web bundle, copy it into ios/, open Xcode (SPM only — no CocoaPods)
 ```
 
 ## Conventions
 
 - The codebase is deliberately dense: long single-line functions, minimal whitespace, few comments. Match the existing style rather than reformatting files you touch.
 - `shared/` and `server/engine/` must stay platform-free (no `node:*`, no DOM). That's what lets them run unchanged in a browser, a WebView, or a future native host — don't reintroduce a Node dependency there.
+- Client code must not touch `localStorage` or `navigator.vibrate` directly. Use `src/net/storage.ts` (sync cache over Capacitor Preferences on native, hydrated in `main.tsx` before first render), `src/net/haptics.ts`, and branch on `native` from `src/net/platform.ts`. The web path must behave exactly as before; `npm run test:browser` is the regression gate.
+- Native plugins must ship a `Package.swift` (`npx cap sync ios` warns otherwise) — see `docs/decisions/0003-spm-and-official-barcode-scanner.md`.
 
 ## Invariants
 

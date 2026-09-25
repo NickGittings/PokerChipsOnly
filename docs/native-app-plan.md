@@ -22,7 +22,7 @@ The wire protocol is plain JSON over one WebSocket (`shared/types.ts`). An Andro
 
 ### Environment
 
-Xcode 27 + iOS 26.5 simulators are installed. **CocoaPods is missing** — install via `brew install cocoapods` (system Ruby 2.6 is too old for a gem install). For Stage 4, the Android SDK is at `~/Library/Android/sdk` but **no JDK is installed** (`java -version` fails) — install Android Studio for its bundled JDK.
+Xcode 27 + iOS 26.5 simulators are installed. ~~**CocoaPods is missing**~~ — **not needed**: Capacitor 8 scaffolds iOS with Swift Package Manager and every plugin we use ships a `Package.swift` (see `docs/decisions/0003-spm-and-official-barcode-scanner.md`). For Stage 4, the Android SDK is at `~/Library/Android/sdk` but **no JDK is installed** (`java -version` fails) — install Android Studio for its bundled JDK.
 
 ---
 
@@ -32,9 +32,20 @@ Xcode 27 + iOS 26.5 simulators are installed. **CocoaPods is missing** — insta
 
 ---
 
-## Stage 1 — Capacitor iOS shell, still using the laptop server
+## Stage 1 — Capacitor iOS shell, still using the laptop server ✅ (code complete; on-device checks pending)
 
 Outcome: a sideloaded iOS app that plays a full game night. The laptop still runs `npm start`.
+
+**Status (2026-09-25).** Implemented on branch `ios-stage-1`; web path unchanged (`npm test` 206 pass, `npm run test:browser` 40 pass). Built with `xcodebuild` and run on the iPhone 17 Simulator against a throwaway `STATE_FILE=:memory:` server: pairing screen renders, a stored server address connects over the LAN IP (ATS ok), snapshots arrive every second, and killing/restarting the server recovers to "connected" within ~3s. **Deviations from the plan below:**
+- **SPM, not CocoaPods; scanner swapped** to `@capacitor/barcode-scanner` (`@capacitor-mlkit/barcode-scanning` has no `Package.swift`). `ios/.gitignore` from Capacitor already covers `App/App/public` and the generated config, so the root `.gitignore` is unchanged.
+- **Storage is a sync cache** (`src/net/storage.ts`): Preferences is async but every read (`deviceToken()`, `JoinView`, `SetupView`) was synchronous, so `main.tsx` awaits `hydrate()` before first render. Web is plain `localStorage`. New code must use `storage`, not `localStorage`.
+- **Pure URL helpers live in `shared/origin.ts`** (`wsUrl`, `parseOrigin`, unit-tested); `src/net/serverOrigin.ts` re-exports them and holds the stateful getter/setter. A bare `host` with no port defaults to `:3000`.
+- **Safe-area fix (not in the plan):** with `contentInset: 'never'` the page runs under the status bar and the app header collided with it. `main.tsx` tags `<html class="native">` and `felt.css` pads the body top by `env(safe-area-inset-top)`, except for the player views that already handle it.
+- **`appStateChange`** is wired in `useGameSocket.ts` only (`src/net/appState.ts`); in `useNotifications.ts` the sole `visibilitychange` consumer is the title flash, which is now web-only.
+- Icon + splash sources are `assets/*.svg`; regenerate with `npx capacitor-assets generate --ios`.
+- `/play` dropped from the router whitelist; "Change table" lives in the footer (native only, confirms first).
+
+**Not yet verified (needs a real iPhone):** camera QR scan (the Simulator has no camera), the local-network permission prompt, lock/unlock seat reclaim, and force-quit reclaim. Verification steps 3-5 below remain open. One unexplained observation: a single Simulator launch showed the disconnected indicator with a live snapshot for ~60s; it did not reproduce in 17 later relaunches on identical code, and the socket trace showed no disconnects. Watch for it on device.
 
 **1.1 Tooling.** `npm i @capacitor/core @capacitor/ios` + `npm i -D @capacitor/cli`. `capacitor.config.ts` with `webDir: 'dist'`, `appId: 'com.nickgittings.pokerchipsonly'`, `ios: { contentInset: 'never', backgroundColor: '#0B2517' }`. Commit `ios/`, gitignore `ios/App/Pods`. No Vite `base` change is needed — Capacitor serves `webDir` at the root of `capacitor://localhost`, so the existing absolute `/assets/...` paths resolve; verify on first run.
 

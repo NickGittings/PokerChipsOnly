@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Snapshot } from '../../shared/types';
 import { placeOf } from '../../shared/standings';
+import { haptic } from './haptics';
+import { native } from './platform';
 
 export type Notice = { id: number; text: string; tone: 'turn' | 'deal' | 'bust' | 'info'; urgent?: boolean };
 
@@ -44,10 +46,11 @@ export function useNotifications(snapshot: Snapshot | null, connected: boolean) 
     for (const notice of added) timers.current.set(notice.id, setTimeout(() => dismiss(notice.id), notice.urgent ? 8000 : 5000));
     const audible = pending.find(notice => notice.urgent);
     if (!audible) return;
-    try { navigator.vibrate?.(audible.tone === 'bust' ? [150, 70, 150] : [80, 50, 80]); } catch { /* Vibration is optional. */ }
+    haptic(audible.tone === 'bust' ? 'bust' : 'turn');
     try { const ctx = audio.current; if (ctx?.state === 'running') { const oscillator = ctx.createOscillator(), gain = ctx.createGain(); oscillator.connect(gain); gain.connect(ctx.destination); oscillator.frequency.value = audible.tone === 'bust' ? 440 : audible.tone === 'deal' ? 880 : 660; gain.gain.setValueAtTime(.05, ctx.currentTime); gain.gain.exponentialRampToValueAtTime(.001, ctx.currentTime + .22); oscillator.onended = () => { oscillator.disconnect(); gain.disconnect(); }; oscillator.start(); oscillator.stop(ctx.currentTime + .22); } } catch { /* Sound is optional. */ }
   }, [snapshot, connected, dismiss]);
   useEffect(() => {
+    if (native) return; // Tab-title flashing is meaningless in the app shell.
     const title = document.title, notice = connected ? [...notices].reverse().find(item => item.urgent) : undefined;
     let interval: ReturnType<typeof setInterval> | undefined, flash = false;
     const update = () => { clearInterval(interval); document.title = title; flash = false; if (document.hidden && notice) { document.title = notice.text; interval = setInterval(() => { flash = !flash; document.title = flash ? title : notice.text; }, 1000); } };

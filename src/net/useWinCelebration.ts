@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Snapshot } from '../../shared/types';
 import { potWinsFor } from '../../shared/winCelebration';
 import { potShares } from '../../shared/potShares';
+import { haptic } from './haptics';
 
 const images = Object.values(
   import.meta.glob('../assets/wins/*.{png,jpg,jpeg,webp,gif,svg}', { eager: true, query: '?url', import: 'default' }),
@@ -55,7 +56,7 @@ export function useWinCelebration(snapshot: Snapshot | null, connected: boolean,
     lastImage.current = src;
     setCelebration({ id: ++sequence.current, src, amount });
     timer.current = setTimeout(dismiss, 10000);
-    try { navigator.vibrate?.([80, 50, 80]); } catch { /* Vibration is optional. */ }
+    haptic('win');
   }, [snapshot, connected, hold, dismiss]);
   return { celebration: connected && !hold ? celebration : null, dismiss };
 }

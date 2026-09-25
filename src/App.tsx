@@ -1,9 +1,14 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertHostContext } from './components/AlertHostContext';
+import { KeepAwake } from '@capacitor-community/keep-awake';
+import { native } from './net/platform';
+import { serverOrigin, setServerOrigin } from './net/serverOrigin';
 import { useGameSocket } from './net/useGameSocket';
 import { useNotifications } from './net/useNotifications';
+import { useRoute } from './net/useRoute';
 import { Notifications } from './components/Notifications';
+import { PairView } from './views/PairView';
 import { SetupView } from './views/SetupView';
 import { JoinView } from './views/JoinView';
 import { LobbyView } from './views/LobbyView';
@@ -11,29 +16,31 @@ import { BoardView } from './views/BoardView';
 import { PlayerView } from './views/PlayerView';
 export function App() {
   const [alertHost, setAlertHost] = useState<HTMLDivElement | null>(null);
-  const [pathname, setPathname] = useState(location.pathname);
-  const board = pathname === '/board', setup = pathname === '/setup';
+  const { route, navigate } = useRoute(), [origin, setOrigin] = useState(serverOrigin);
+  const board = route === '/board', setup = route === '/setup';
+  const pair = (next: string | null) => { setServerOrigin(next); setOrigin(next); };
   useEffect(() => {
-    const pop = () => setPathname(location.pathname);
-    const navigate = (event: MouseEvent) => {
+    const onClick = (event: MouseEvent) => {
       if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       const link = event.target instanceof Element ? event.target.closest('a') : null;
       if (!link || link.target || link.hasAttribute('download')) return;
       const url = new URL(link.href);
-      if (url.origin !== location.origin || !['/', '/setup', '/play', '/board'].includes(url.pathname)) return;
-      event.preventDefault(); history.pushState(null, '', url.pathname); setPathname(url.pathname); window.scrollTo(0, 0);
+      if (url.origin !== location.origin || !['/', '/setup', '/board'].includes(url.pathname)) return;
+      event.preventDefault(); navigate(url.pathname);
     };
-    window.addEventListener('popstate', pop); document.addEventListener('click', navigate);
-    return () => { window.removeEventListener('popstate', pop); document.removeEventListener('click', navigate); };
-  }, []);
-  const { snapshot, connected, send, error, clearError } = useGameSocket(board || setup);
+    document.addEventListener('click', onClick);
+    return () => document.removeEventListener('click', onClick);
+  }, [navigate]);
+  const { snapshot, connected, send, error, clearError } = useGameSocket(board || setup, origin);
   const notifications = useNotifications(snapshot, connected);
   useEffect(() => {
     if (!board) return;
+    if (native) { void KeepAwake.keepAwake().catch(() => {}); return () => { void KeepAwake.allowSleep().catch(() => {}); }; }
     let lock: WakeLockSentinel | undefined, stopped = false;
     const acquire = async () => { if (document.visibilityState !== 'visible' || !('wakeLock' in navigator)) return; try { const next = await navigator.wakeLock.request('screen'); if (stopped) await next.release(); else lock = next; } catch { /* Available only on supported secure origins. */ } };
     void acquire(); document.addEventListener('visibilitychange', acquire); return () => { stopped = true; void lock?.release(); document.removeEventListener('visibilitychange', acquire); };
   }, [board]);
+  if (native && !origin) return <PairView onPair={pair}/>;
   const props = snapshot ? { snapshot, send, connected } : null;
   const seated = snapshot?.game.players.some(p => p.id === snapshot.you.id);
   const showHeader = !board && (!snapshot || snapshot.game.phase === 'lobby' || !seated && !setup);
@@ -45,5 +52,5 @@ export function App() {
   return <AlertHostContext.Provider value={setAlertHost}>{showHeader && <header className="app-header"><a href="/" className="brand"><span className="brand-chip">♣</span><span>POKERCHIPS <small>ONLY</small></span></a><nav><span className={connected ? 'connection connected' : 'connection'}><i/>{connected ? 'Table connected' : 'Connecting…'}</span><a href={board ? '/' : '/board'}>{board ? 'Join table' : 'Table view'} <span>↗</span></a></nav></header>}
     {alertHost ? createPortal(alerts, alertHost) : alerts}
     {!props ? <main className="loading"><span className="brand-chip">♣</span><h1>Taking our seats…</h1><p>Connecting to your local table.</p></main> : setup && snapshot!.game.phase === 'lobby' ? <SetupView {...props}/> : board || setup && snapshot!.game.phase !== 'lobby' ? <BoardView {...props}/> : seated ? snapshot!.game.phase === 'lobby' ? <LobbyView {...props}/> : <PlayerView {...props}/> : <JoinView {...props}/>}
-    <footer className="app-footer"><span>REAL CARDS. DIGITAL CHIPS.</span><span>Made for your home table <span className="gold-text">♣</span></span></footer></AlertHostContext.Provider>;
+    <footer className="app-footer"><span>REAL CARDS. DIGITAL CHIPS.</span>{native && <button type="button" className="change-table" onClick={() => { if (window.confirm('Disconnect from this table and pick another?')) pair(null); }}>Change table</button>}<span>Made for your home table <span className="gold-text">♣</span></span></footer></AlertHostContext.Provider>;
 }
