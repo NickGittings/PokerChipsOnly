@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ClientMsg, Config, Snapshot } from '../../shared/types';
 import { blindLevel, validateConfig } from '../../shared/blinds';
 import { money } from '../../shared/chips';
 import { DenominationEditor } from '../components/DenominationEditor';
 import { ChipStack } from '../components/Chips';
 import { JoinQr } from '../components/JoinQr';
+import { native } from '../net/platform';
+import { storage } from '../net/storage';
 const PACE_PRESETS = [
   { name: 'Relaxed', levelMinutes: 20, multiplier: 1.5, durationMinutes: 0 },
   { name: 'Normal', levelMinutes: 15, multiplier: 2, durationMinutes: 120 },
@@ -13,9 +15,12 @@ const PACE_PRESETS = [
 ];
 function NumberWell({ label, value, onChange, prefix = '$', step = 1, min = 0, max }: { label: string; value: number; onChange: (value: number) => void; prefix?: string; step?: number; min?: number; max?: number }) { return <label className="field"><span className="label">{label}</span><span className="value-well"><span>{prefix}</span><input aria-label={label} type="number" min={min} max={max} step={step} value={value || ''} onChange={e => onChange(Number(e.target.value))}/></span></label>; }
 export function SetupView({ snapshot, send, connected }: { snapshot: Snapshot; send: (msg: ClientMsg) => void; connected: boolean }) {
-  const [config, setConfig] = useState<Config>(() => { try { const saved = localStorage.getItem('poker-setup'); return saved ? { ...snapshot.game.config, ...JSON.parse(saved) } : snapshot.game.config; } catch { return snapshot.game.config; } });
+  const [config, setConfig] = useState<Config>(() => { try { const saved = storage.get('poker-setup'); return saved ? { ...snapshot.game.config, ...JSON.parse(saved) } : snapshot.game.config; } catch { return snapshot.game.config; } });
   const [attempted, setAttempted] = useState(false);
-  useEffect(() => { localStorage.setItem('poker-setup', JSON.stringify(config)); }, [config]);
+  // Native writes cross the Preferences bridge, so they're debounced (and flushed on unmount) instead of firing per keystroke.
+  const latest = useRef(config); latest.current = config;
+  useEffect(() => { if (!native) { storage.set('poker-setup', JSON.stringify(config)); return; } const timer = setTimeout(() => storage.set('poker-setup', JSON.stringify(config)), 400); return () => clearTimeout(timer); }, [config]);
+  useEffect(() => () => { if (native) storage.set('poker-setup', JSON.stringify(latest.current)); }, []);
   const set = <K extends keyof Config>(key: K, value: Config[K]) => setConfig(c => ({ ...c, [key]: value }));
   const errors = validateConfig(config), canStart = snapshot.game.players.length >= 2 && !errors.length && connected && snapshot.you.admin;
   const previewable = config.denominations.every(d => d.value > 0) && config.multiplier >= 1 && config.smallBlind > 0 && config.bigBlind > 0;
