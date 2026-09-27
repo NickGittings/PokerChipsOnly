@@ -17,8 +17,19 @@ describe('parseOrigin', () => {
     ['  192.168.1.20:3000  ', 'http://192.168.1.20:3000'],
     ['192.168.1.20', 'http://192.168.1.20:3000'],
     ['localhost:4000', 'http://localhost:4000'],
+    ['192.168.1.20/', 'http://192.168.1.20:3000'],
+    ['localhost/board', 'http://localhost:3000'],
+    ['192.168.1.20?x=1', 'http://192.168.1.20:3000'],
+    ['192.168.1.20:4000/board', 'http://192.168.1.20:4000'],
+    ['192.168.1.20:80', 'http://192.168.1.20'],
+    ['[::1]', 'http://[::1]:3000'],
+    ['[::1]:4000/', 'http://[::1]:4000'],
     ['https://table.example.com', 'https://table.example.com'],
+    ['http://192.168.1.20', 'http://192.168.1.20:3000'],
+    ['http://192.168.1.20:80', 'http://192.168.1.20'],
+    ['192.168.1.20/?next=http://x', 'http://192.168.1.20:3000'],
+    ['192.168.1.20:4000\\board', 'http://192.168.1.20:4000'],
   ])('%j -> %s', (input, expected) => expect(parseOrigin(input)).toBe(expected));
 
-  it.each(['', '   ', 'ftp://192.168.1.20', 'capacitor://localhost', 'http://', 'not a url'])('rejects %j', input => expect(parseOrigin(input)).toBeNull());
+  it.each(['', '   ', 'ftp://192.168.1.20', 'capacitor://localhost', 'http://', 'not a url', 'http:/192.168.1.20', 'host:abc'])('rejects %j', input => expect(parseOrigin(input)).toBeNull());
 });

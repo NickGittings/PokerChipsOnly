@@ -6,7 +6,7 @@
 
 /* Labeled color samples with large touch targets for chip customization. */
 .swatches{grid-column:1/-1;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.swatches .swatch{width:100%;min-height:72px;padding:8px 4px;gap:6px;border:2px solid #ffffff30;border-radius:12px;color:#fff}.swatch::after{content:none}.swatch-color{display:block;width:32px;height:32px;border-radius:50%;border:2px solid #fff;box-shadow:0 2px 4px #0005}.swatch-name{font-size:11px;line-height:1.2}.swatches .swatch.selected{border-color:var(--gold);box-shadow:0 0 0 1px var(--gold)}.swatches .swatch:hover{border-color:#fff}@media(max-width:700px){.swatches{grid-column:1/-1}}
-.app-footer .change-table{background:none;border:0;padding:0;min-height:0;font:inherit;letter-spacing:inherit;color:var(--gold);text-decoration:underline;cursor:pointer}
+.change-table{background:none;border:0;padding:0;min-height:0;font:inherit;letter-spacing:inherit;color:var(--gold);text-decoration:underline;cursor:pointer}
 .join-emblem .brand-chip{margin:0 auto}
 /* Native shell runs edge to edge under the status bar (contentInset: never); views that don't manage the inset themselves get it from the body. */
 .native body:not(:has(.player-shell,.player-page)){padding-top:env(safe-area-inset-top)}

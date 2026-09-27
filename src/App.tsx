@@ -20,7 +20,9 @@ export function App() {
   const [alertHost, setAlertHost] = useState<HTMLDivElement | null>(null);
   const { route, navigate } = useRoute(), [origin, setOrigin] = useState(serverOrigin);
   const board = route === '/board', setup = route === '/setup';
-  const pair = (next: string | null) => { setServerOrigin(next); setOrigin(next); };
+  // A new table starts at the player view: a remembered /board or /setup would otherwise carry admin over to a table nobody chose it for.
+  const pair = (next: string | null) => { navigate('/'); setServerOrigin(next); setOrigin(next); };
+  const changeTable = native && <button type="button" className="change-table" onClick={() => { if (window.confirm('Disconnect from this table and pick another?')) pair(null); }}>Change table</button>;
   const backRoute = useRef(route), lastBack = useRef(0);
   backRoute.current = route;
   useEffect(() => {
@@ -41,7 +43,7 @@ export function App() {
       const link = event.target instanceof Element ? event.target.closest('a') : null;
       if (!link || link.target || link.hasAttribute('download')) return;
       const url = new URL(link.href);
-      if (url.origin !== location.origin || !['/', '/setup', '/board'].includes(url.pathname)) return;
+      if (url.protocol !== location.protocol || url.host !== location.host ||!['/', '/setup', '/board'].includes(url.pathname)) return;
       event.preventDefault(); navigate(url.pathname);
     };
     document.addEventListener('click', onClick);
@@ -61,12 +63,12 @@ export function App() {
   const seated = snapshot?.game.players.some(p => p.id === snapshot.you.id);
   const showHeader = !board && (!snapshot || snapshot.game.phase === 'lobby' || !seated && !setup);
   const alerts = <>
-    {!connected && snapshot && <div className="connection-banner" role="status">Reconnecting… Your seat is saved. Actions are locked until you’re back.</div>}
+    {!connected && snapshot && <div className="connection-banner" role="status">Reconnecting… Your seat is saved. Actions are locked until you’re back.{changeTable && <> {changeTable}</>}</div>}
     {error && <div className="error-banner" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={clearError}>×</button></div>}
     <Notifications {...notifications}/>
   </>;
   return <AlertHostContext.Provider value={setAlertHost}>{showHeader && <header className="app-header"><a href="/" className="brand"><span className="brand-chip">♣</span><span>POKERCHIPS <small>ONLY</small></span></a><nav><span className={connected ? 'connection connected' : 'connection'}><i/>{connected ? 'Table connected' : 'Connecting…'}</span><a href={board ? '/' : '/board'}>{board ? 'Join table' : 'Table view'} <span>↗</span></a></nav></header>}
     {alertHost ? createPortal(alerts, alertHost) : alerts}
     {!props ? <main className="loading"><span className="brand-chip">♣</span><h1>Taking our seats…</h1><p>Connecting to your local table.</p></main> : setup && snapshot!.game.phase === 'lobby' ? <SetupView {...props}/> : board || setup && snapshot!.game.phase !== 'lobby' ? <BoardView {...props}/> : seated ? snapshot!.game.phase === 'lobby' ? <LobbyView {...props}/> : <PlayerView {...props}/> : <JoinView {...props}/>}
-    <footer className="app-footer"><span>REAL CARDS. DIGITAL CHIPS.</span>{native && <button type="button" className="change-table" onClick={() => { if (window.confirm('Disconnect from this table and pick another?')) pair(null); }}>Change table</button>}<span>Made for your home table <span className="gold-text">♣</span></span></footer></AlertHostContext.Provider>;
+    <footer className="app-footer"><span>REAL CARDS. DIGITAL CHIPS.</span>{changeTable}<span>Made for your home table <span className="gold-text">♣</span></span></footer></AlertHostContext.Provider>;
 }
