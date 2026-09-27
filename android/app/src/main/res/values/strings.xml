@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">PokerChips Only</string>
+    <string name="title_activity_main">PokerChips Only</string>
+    <string name="package_name">com.nickgittings.pokerchipsonly</string>
+    <string name="custom_url_scheme">com.nickgittings.pokerchipsonly</string>
+</resources>

@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertHostContext } from './components/AlertHostContext';
 import { KeepAwake } from '@capacitor-community/keep-awake';
+import { App as CapacitorApp } from '@capacitor/app';
+import { Capacitor } from '@capacitor/core';
 import { native } from './net/platform';
 import { serverOrigin, setServerOrigin } from './net/serverOrigin';
 import { useGameSocket } from './net/useGameSocket';
@@ -19,6 +21,20 @@ export function App() {
   const { route, navigate } = useRoute(), [origin, setOrigin] = useState(serverOrigin);
   const board = route === '/board', setup = route === '/setup';
   const pair = (next: string | null) => { setServerOrigin(next); setOrigin(next); };
+  const backRoute = useRef(route), lastBack = useRef(0);
+  backRoute.current = route;
+  useEffect(() => {
+    if (Capacitor.getPlatform() !== 'android') return;
+    const listener = CapacitorApp.addListener('backButton', () => {
+      const now = Date.now();
+      if (now - lastBack.current < 300) return;
+      lastBack.current = now;
+      if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) { (document.activeElement as HTMLElement).blur(); return; }
+      if (backRoute.current !== '/') { backRoute.current = '/'; navigate('/'); }
+      else void CapacitorApp.exitApp();
+    });
+    return () => { void listener.then(handle => handle.remove()); };
+  }, [navigate]);
   useEffect(() => {
     const onClick = (event: MouseEvent) => {
       if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
