@@ -21,6 +21,8 @@ npm test              # vitest — server/**/*.test.ts + shared/**/*.test.ts
 npm run test:browser  # Playwright multi-device E2E (isolated server on :3301)
 npm run check          # test + build
 npm run build && npx cap sync ios && npx cap open ios   # iOS shell: rebuild the web bundle, copy it into ios/, open Xcode (SPM only — no CocoaPods)
+# Android joiner: use JDK 21 (Android Studio JBR 25 is too new for this Gradle wrapper)
+npm run build && npx cap sync android && JAVA_HOME=/path/to/jdk-21 ./android/gradlew -p android assembleDebug
 ```
 
 ## Conventions
