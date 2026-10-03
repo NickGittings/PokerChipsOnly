@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:browser": "playwright test",
-    "check": "npm run test && npm run build"
+    "check": "npm run test && npm run build && npm run check:lan-server",
+    "check:lan-server": "tsc -p plugins/lan-server/tsconfig.json"
   },
   "dependencies": {
     "@capacitor-community/keep-awake": "^8.0.1",
@@ -22,6 +23,7 @@
     "@capacitor/ios": "^8.5.2",
     "@capacitor/preferences": "^8.0.1",
     "@capacitor/status-bar": "^8.0.3",
+    "@pokerchips/lan-server": "file:plugins/lan-server",
     "express": "^4.21.2",
     "qrcode.react": "^4.2.0",
     "react": "^18.3.1",

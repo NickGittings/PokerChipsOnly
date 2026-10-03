@@ -59,7 +59,11 @@
 	<key>NSCameraUsageDescription</key>
 	<string>PokerChips Only uses the camera to scan the QR code on the table screen so this phone can join the game.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>PokerChips Only connects to the game running on your local Wi-Fi network so you can play at the table.</string>
+	<string>PokerChips Only hosts, discovers, and connects to games on your local Wi-Fi network so everyone can play at the table.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_pokerchips._tcp</string>
+	</array>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

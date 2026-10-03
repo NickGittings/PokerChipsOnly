@@ -3,10 +3,11 @@ import type { Snapshot } from '../../shared/types';
 import { potWinsFor } from '../../shared/winCelebration';
 import { potShares } from '../../shared/potShares';
 import { haptic } from './haptics';
+import chipStack from '../assets/celebrations/chip-stack.svg';
+import goldenTrophy from '../assets/celebrations/golden-trophy.svg';
+import confettiChip from '../assets/celebrations/confetti-chip.svg';
 
-const images = Object.values(
-  import.meta.glob('../assets/wins/*.{png,jpg,jpeg,webp,gif,svg}', { eager: true, query: '?url', import: 'default' }),
-) as string[];
+const images = [chipStack, goldenTrophy, confettiChip];
 
 export type Celebration = { id: number; src: string | null; amount: number };
 
