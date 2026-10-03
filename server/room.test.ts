@@ -71,7 +71,7 @@ describe('authoritative multiplayer room', () => {
     const room = new Room(urls, file), host = connect(room, 0, true);
     room.handle(host.ws, { type: 'setJoinUrl', url: urls[1] });
     const saved = JSON.parse(readFileSync(file, 'utf8'));
-    expect(saved).toMatchObject({ version: 3, joinUrl: urls[1] });
+    expect(saved).toMatchObject({ version: 2, hostRole: 1, joinUrl: urls[1] });
     expect(new Room(urls, file).joinUrl).toBe(urls[1]);
     expect(new Room(urls[0], file).joinUrl).toBe(urls[0]);
     delete saved.joinUrl; writeFileSync(file, JSON.stringify(saved));
@@ -577,7 +577,7 @@ describe('authoritative multiplayer room', () => {
     const directory = mkdtempSync(join(tmpdir(), 'poker-room-')); directories.push(directory);
     const file = join(directory, 'state.json'), { room, board, phones } = table(file); start(room, board);
     act(room, phones, { type: 'raise', amount: 30 });
-    const saved = JSON.parse(readFileSync(file, 'utf8')); expect(saved.version).toBe(3);
+    const saved = JSON.parse(readFileSync(file, 'utf8')); expect(saved.version).toBe(2);
     const recovered = new Room('http://192.168.1.2:3000', file);
     expect(recovered.game.players.map(p => ({ ...p, connected: true }))).toEqual(room.game.players);
     expect(recovered.game.actorId).toBe(room.game.actorId); expect(recovered.game.revision).toBe(room.game.revision);
@@ -1015,7 +1015,8 @@ describe('host role', () => {
     const board = connect(room, 0, true), spare = connect(room, 4, true);
     expect(board.state().you).toMatchObject({ host: true, admin: true }); expect(spare.state().you).toMatchObject({ host: false, admin: true });
     room.handle(phone.ws, { type: 'claimHost' }); expect(phone.error()?.message).toMatch(/only the host/i);
-    room.handle(spare.ws, { type: 'claimHost' }); expect(spare.state().you.host).toBe(true); expect(board.state().you).toMatchObject({ host: false, admin: true });
+    room.handle(spare.ws, { type: 'claimHost' }); expect(spare.error()?.message).toMatch(/still connected/i); expect(board.state().you.host).toBe(true);
+    room.disconnect(board.ws); room.handle(spare.ws, { type: 'claimHost' }); expect(spare.state().you.host).toBe(true);
   });
 
   it('transfers host to a connected seated player, who gains admin from their phone', () => {
@@ -1071,20 +1072,29 @@ describe('host role', () => {
     room.handle(host.ws, { type: 'setBoardAdmin', enabled: false });
     expect(board.state().you.dealing).toBe(false); expect(host.state().you.dealing).toBe(true);
     expect(phones.filter(p => p !== button && p !== host)[0].state().you.dealing).toBe(false);
+    room.handle(host.ws, { type: 'setBoardAdmin', enabled: true }); room.disconnect(board.ws);
+    expect(host.state()).toMatchObject({ boardLive: false, you: { dealing: true } });
+    const revision = room.game.revision; room.handle(host.ws, { type: 'dealerConfirm', revision }); expect(host.error()?.message).toMatch(/no cards waiting/i);
   });
 
   it('saves the host but restores board admin after a restart, and re-elects hosts from older saves', () => {
     const directory = mkdtempSync(join(tmpdir(), 'poker-host-')); directories.push(directory);
     const file = join(directory, 'state.json'), { room, board, phones } = table(file); handOff(room, board, phones[0]);
     room.handle(phones[0].ws, { type: 'setBoardAdmin', enabled: false });
-    const saved = JSON.parse(readFileSync(file, 'utf8')); expect(saved).toMatchObject({ version: 3, hostToken: tokens[1] }); expect(saved).not.toHaveProperty('boardAdmin');
+    const saved = JSON.parse(readFileSync(file, 'utf8')); expect(saved).toMatchObject({ version: 2, hostRole: 1, hostToken: tokens[1] }); expect(saved).not.toHaveProperty('boardAdmin');
     const recovered = new Room('http://192.168.1.2:3000', file);
     expect(recovered.hostToken).toBe(tokens[1]); expect(recovered.boardAdmin).toBe(true);
     expect(connect(recovered, 0, true).state().you).toMatchObject({ host: false, admin: true });
-    writeFileSync(file, JSON.stringify({ ...saved, version: 2 }));
+    delete saved.hostRole; writeFileSync(file, JSON.stringify(saved));
     const legacy = new Room('http://192.168.1.2:3000', file), phone = connect(legacy, 1);
     expect(legacy.hostToken).toBe(''); expect(phone.state().you).toMatchObject({ host: false, admin: false });
     expect(connect(legacy, 0, true).state().you).toMatchObject({ host: true, admin: true });
+  });
+
+  it('treats a player tab in the host board’s browser as the host device', () => {
+    const { room, board } = table(); start(room, board);
+    const playerTab = connect(room, 0); expect(playerTab.state().you).toMatchObject({ host: true, admin: true });
+    room.handle(playerTab.ws, { type: 'pauseClock', revision: room.game.revision }); expect(room.game.clockPaused).toBe(true);
   });
 
   it('shares the host player id but never a token', () => {

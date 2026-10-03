@@ -100,8 +100,8 @@ For emulator testing, run a disposable laptop server on port 3000 and enter `10.
 **Status (2026-10-03).** Implemented on branch `stage-2-host-role`. Deviations and details from the plan below:
 - Only the first **board** connection is auto-elected host; phones become host only via `transferHost`, and `claimHost` requires admin. This avoids handing admin to whoever scans the QR first.
 - The `peer.board` half is the room-level `boardAdmin` flag (default on, not undoable). Only the host can toggle it via `setBoardAdmin`. It isn't persisted, so a server restart restores board admin as the recovery path for a lost host. **Revisit in Stage 3**, where the host app *is* the server and a relaunch would silently re-enable board admin.
-- `reclaimSeat` does not move the host role (a guest could otherwise take admin from an offline host). Saves are now `version: 3`; a version-2 save loads with `hostToken` cleared, because the old election often made a random phone host.
-- Dealer prompts for an away button fall back to board pages while board admin is on, otherwise to the host device. `New game` stays board-only, since `/setup` is the only place to start the next tournament.
+- `reclaimSeat` does not move the host role (a guest could otherwise take admin from an offline host). Saves stay `version: 2` (so a rollback still loads them) with a `hostRole: 1` marker; a save without it loads with `hostToken` cleared, because the old election often made a random phone host. `claimHost` is refused while the current host is connected.
+- Dealer prompts for an away button fall back to board pages while board admin is on, otherwise to the host device. `New game` stays board-only, since `/setup` is the only place to start the next tournament. A phone host gets the Host controls sheet in the lobby and join views too (mounted in `App.tsx`).
 - `Snapshot` gained `hostId` (identity id, never a token) and `boardAdmin`. A host phone sees the full `HostPanel` in a collapsed **Host controls** sheet in `PlayerView`.
 - Setup (`/setup`) is still a board connection; starting a tournament from a phone host is left to Stage 3's host UX.
 

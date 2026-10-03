@@ -8,7 +8,7 @@ import { BlindTimer } from '../components/BlindTimer';
 import { ActionBar } from '../components/ActionBar';
 import { GameOver, ShowdownModal, StreetModal, showdownModalOpen, streetModalOpen } from '../components/GameModals';
 import { WinCelebration } from '../components/WinCelebration';
-import { HostPanel } from '../components/HostPanel';
+import { HostSheet } from '../components/HostPanel';
 import { HandLog, TableRoster, SeatMarkers, blindClass } from '../components/PokerTable';
 import { useWinCelebration } from '../net/useWinCelebration';
 import '../styles/game.css';
@@ -20,7 +20,7 @@ export function PlayerView({ snapshot, send, connected }: Props) {
   const { celebration, dismiss } = useWinCelebration(snapshot, connected, dialogOpen);
   const [hostOpen, setHostOpen] = useState(false);
   const player = game.players.find(p => p.id === you.id);
-  const hostSheet = you.admin && <details className="game-panel player-host-sheet" open={hostOpen} onToggle={e => setHostOpen(e.currentTarget.open)}><summary>Host controls</summary><HostPanel snapshot={snapshot} send={send} connected={connected} /></details>;
+  const hostSheet = <HostSheet snapshot={snapshot} send={send} connected={connected} open={hostOpen} onToggle={setHostOpen} />;
   if (!player) return <main className="player-page"><section className="game-panel"><h1>Find your place at the table.</h1><p>Choose a seat to join this game.</p><a className="game-button primary" href="/">Choose a seat →</a></section></main>;
   const pot = game.phase === 'hand-complete' || game.phase === 'tournament-over' ? 0 : game.phase === 'showdown' ? game.pots.filter(p => !p.awarded).reduce((sum, p) => sum + p.amount, 0) : game.players.reduce((sum, p) => sum + p.committedThisHand, 0);
   const notice = levelNotice(game);

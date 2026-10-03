@@ -303,7 +303,7 @@ for (const trigger of ['watchdog', 'screen wake']) test(`a silent socket reconne
   const game = startTournament(lobby, lobby.config); game.awaitingDeal = false;
   const snapshot: Snapshot = {
     game, you: { id: game.actorId!, host: false, admin: false, dealing: false, legal: legalActions(game, game.actorId!) },
-    hostId: null, boardAdmin: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: false, serverTime: Date.now(),
+    hostId: null, boardAdmin: true, boardLive: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: false, serverTime: Date.now(),
   };
   const joins: { token: string }[] = [], publishers: (() => void)[] = [];
   await page.routeWebSocket('**/ws', socket => {
@@ -359,7 +359,7 @@ test('time limit shows the final hand and ranks surviving stacks on board and ph
   game.totalChips = 1500;
   const snapshot: Snapshot = {
     game, you: { id: 'alice', host: true, admin: true, dealing: true, legal: null },
-    hostId: null, boardAdmin: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: true, serverTime: Date.now(),
+    hostId: null, boardAdmin: true, boardLive: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: true, serverTime: Date.now(),
   };
   let publish = () => {};
   await page.routeWebSocket('**/ws', socket => {
@@ -401,7 +401,7 @@ test('player screen shows a 2x2 roster with turn, dealer, and blind markers belo
   game.button = 0; game.smallBlindSeat = 1; game.bigBlindSeat = 2; game.actorId = 'bob'; game.totalChips = 1985;
   const snapshot: Snapshot = {
     game, you: { id: 'alice', host: false, admin: false, dealing: false, legal: null },
-    hostId: null, boardAdmin: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: false, serverTime: Date.now(),
+    hostId: null, boardAdmin: true, boardLive: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: false, serverTime: Date.now(),
   };
   let publish = () => {};
   await page.routeWebSocket('**/ws', socket => { publish = () => socket.send(JSON.stringify({ type: 'state', snapshot })); socket.onMessage(publish); });
@@ -454,7 +454,7 @@ for (const height of [400, 667, 844]) test(`following the actor at ${height}px k
   game.actorId = game.players[0].id;
   const snapshot: Snapshot = {
     game, you: { id: game.players[0].id, host: true, admin: true, dealing: true, legal: null },
-    hostId: null, boardAdmin: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: false, serverTime: Date.now(),
+    hostId: null, boardAdmin: true, boardLive: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: false, serverTime: Date.now(),
   };
   let publish = () => {};
   await page.routeWebSocket('**/ws', socket => {
@@ -500,7 +500,7 @@ test('board can drag a seated player onto another seat to move or swap them', as
   game.players = [createPlayer('alice', 'Alice', 0), createPlayer('bob', 'Bob', 1)];
   const snapshot: Snapshot = {
     game, you: { id: 'board', host: true, admin: true, dealing: true, legal: null },
-    hostId: null, boardAdmin: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: false, serverTime: Date.now(),
+    hostId: null, boardAdmin: true, boardLive: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: false, serverTime: Date.now(),
   };
   const moves: { playerId: string; seat: number }[] = [];
   await page.routeWebSocket('**/ws', socket => {
@@ -535,7 +535,7 @@ test('expanded corner QR has one address picker and preserves its selection when
   const snapshot: Snapshot = {
     game: { ...createGame(), phase: 'hand-complete' },
     you: { id: 'board', host: true, admin: true, dealing: true, legal: null },
-    hostId: null, boardAdmin: true, joinUrl: urls[0], joinUrls: urls, canUndo: false, serverTime: Date.now(),
+    hostId: null, boardAdmin: true, boardLive: true, joinUrl: urls[0], joinUrls: urls, canUndo: false, serverTime: Date.now(),
   };
   await page.routeWebSocket('**/ws', socket => {
     socket.onMessage(raw => {
@@ -565,7 +565,7 @@ test('a phone host gets collapsed host controls that transfer the role and switc
   game.players.forEach(p => p.connected = true);
   const snapshot: Snapshot = {
     game, you: { id: 'alice', host: true, admin: true, dealing: false, legal: null },
-    hostId: 'alice', boardAdmin: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: false, serverTime: Date.now(),
+    hostId: 'alice', boardAdmin: true, boardLive: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: false, serverTime: Date.now(),
   };
   const sent: { type: string }[] = [];
   await page.routeWebSocket('**/ws', socket => {
@@ -594,12 +594,32 @@ test('a phone host gets collapsed host controls that transfer the role and switc
   await page.screenshot({ path: 'test-results/phone-host-sheet.png', fullPage: true });
 });
 
+test('a phone host keeps host controls in the lobby and after losing its seat', async ({ page }) => {
+  const game = createGame();
+  game.players = [createPlayer('alice', 'Alice', 0), createPlayer('bob', 'Bob', 1)]; game.players.forEach(p => p.connected = true);
+  const snapshot: Snapshot = {
+    game, you: { id: 'alice', host: true, admin: true, dealing: false, legal: null },
+    hostId: 'alice', boardAdmin: false, boardLive: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: ['http://127.0.0.1:3301'], canUndo: false, serverTime: Date.now(),
+  };
+  let publish = () => {};
+  await page.routeWebSocket('**/ws', socket => { publish = () => socket.send(JSON.stringify({ type: 'state', snapshot })); socket.onMessage(publish); });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  const sheet = page.locator('.host-sheet-dock .player-host-sheet');
+  await sheet.getByText('Host controls', { exact: true }).click();
+  await expect(sheet.getByLabel('Board screens have admin controls')).not.toBeChecked();
+  snapshot.you.id = 'retired-alice'; snapshot.hostId = 'retired-alice'; publish();
+  await expect(sheet.locator('.host-role')).toContainText('This device');
+  await expect(sheet.getByRole('combobox', { name: 'Hand the host role to' })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
 test('hands pacing counts down at hand boundaries while the overall time limit remains visible', async ({ page }) => {
   const game = createGame();
   game.config.blindPace = 'hands'; game.config.levelHands = 3; game.config.durationMinutes = 60;
   game.phase = 'betting'; game.hand = 1; game.clockPaused = false;
   game.players = [createPlayer('alice', 'Alice', 0, 500), createPlayer('bob', 'Bob', 1, 500)]; game.totalChips = 1000;
-  const snapshot: Snapshot = { game, you: { id: 'alice', host: false, admin: false, dealing: false, legal: null }, hostId: null, boardAdmin: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now() };
+  const snapshot: Snapshot = { game, you: { id: 'alice', host: false, admin: false, dealing: false, legal: null }, hostId: null, boardAdmin: true, boardLive: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now() };
   let publish = () => {};
   await page.routeWebSocket('**/ws', socket => { publish = () => socket.send(JSON.stringify({ type: 'state', snapshot })); socket.onMessage(publish); });
   await page.setViewportSize({ width: 390, height: 667 });
@@ -616,7 +636,7 @@ test('hands pacing counts down at hand boundaries while the overall time limit r
 test('in-app notices detect legal actions unlocking for the same actor and do not repeat on snapshots', async ({ page }) => {
   const lobby = createGame(); lobby.players = [createPlayer('alice', 'Alice', 0), createPlayer('bob', 'Bob', 1)];
   const game = startTournament(lobby, lobby.config);
-  const snapshot: Snapshot = { game, you: { id: game.actorId!, host: false, admin: false, dealing: true, legal: null }, hostId: null, boardAdmin: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now() };
+  const snapshot: Snapshot = { game, you: { id: game.actorId!, host: false, admin: false, dealing: true, legal: null }, hostId: null, boardAdmin: true, boardLive: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now() };
   let publish = () => {};
   await page.routeWebSocket('**/ws', socket => { publish = () => socket.send(JSON.stringify({ type: 'state', snapshot })); socket.onMessage(publish); });
   await page.goto('/');
@@ -649,7 +669,7 @@ for (const verb of ['Raise', 'Bet']) test(`${verb} and activity sheets trap focu
   game.log = Array.from({ length: 14 }, (_, id) => ({ id, text: `Table event ${id + 1}` }));
   const snapshot: Snapshot = {
     game, you: { id: game.actorId!, host: false, admin: false, dealing: false, legal: legalActions(game, game.actorId!) },
-    hostId: null, boardAdmin: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now(),
+    hostId: null, boardAdmin: true, boardLive: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now(),
   };
   const actions: unknown[] = [];
   let publish = () => {};
@@ -732,7 +752,7 @@ for (const phase of ['street-break', 'showdown'] as const) for (const sheet of [
   game.awaitingDeal = false;
   const snapshot: Snapshot = {
     game, you: { id: game.actorId!, host: false, admin: false, dealing: true, legal: legalActions(game, game.actorId!) },
-    hostId: null, boardAdmin: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now(),
+    hostId: null, boardAdmin: true, boardLive: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now(),
   };
   let publish = () => {};
   await page.routeWebSocket('**/ws', socket => {
@@ -772,7 +792,7 @@ test('board shows each commitment once and both views preserve all-in status', a
   game.players[2].stack = 0;
   const snapshot: Snapshot = {
     game, you: { id: 'alice', host: false, admin: false, dealing: false, legal: null },
-    hostId: null, boardAdmin: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now(),
+    hostId: null, boardAdmin: true, boardLive: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now(),
   };
   await page.routeWebSocket('**/ws', socket => socket.onMessage(() => socket.send(JSON.stringify({ type: 'state', snapshot }))));
   await page.goto('/board');
@@ -794,7 +814,7 @@ for (const viewport of [{ width: 390, height: 400 }, { width: 844, height: 300 }
   game.players[0].status = 'busted';
   const snapshot: Snapshot = {
     game, you: { id: 'alice', host: false, admin: false, dealing: true, legal: null },
-    hostId: null, boardAdmin: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now(),
+    hostId: null, boardAdmin: true, boardLive: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now(),
   };
   const messages: unknown[] = [];
   await page.routeWebSocket('**/ws', socket => socket.onMessage(raw => {
@@ -838,7 +858,7 @@ test('winning a pot shows a full-screen celebration only to the winner, ignores 
   game.pots = [{ amount: 20, eligibleIds: ['alice', 'bob'], awarded: false }];
   const snapshot: Snapshot = {
     game, you: { id: 'alice', host: false, admin: false, dealing: false, legal: null },
-    hostId: null, boardAdmin: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: true, serverTime: Date.now(),
+    hostId: null, boardAdmin: true, boardLive: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: true, serverTime: Date.now(),
   };
   let publish = () => {};
   await page.routeWebSocket('**/ws', socket => { publish = () => socket.send(JSON.stringify({ type: 'state', snapshot })); socket.onMessage(publish); });
@@ -905,7 +925,7 @@ test('an uncontested win (pots array replaced wholesale) and a split pot both tr
   game.pots = [{ amount: 20, eligibleIds: ['alice', 'bob'], awarded: false }, { amount: 15, eligibleIds: ['alice'], awarded: false }];
   const snapshot: Snapshot = {
     game, you: { id: 'bob', host: false, admin: false, dealing: false, legal: null },
-    hostId: null, boardAdmin: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now(),
+    hostId: null, boardAdmin: true, boardLive: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: false, serverTime: Date.now(),
   };
   let publish = () => {};
   await page.routeWebSocket('**/ws', socket => { publish = () => socket.send(JSON.stringify({ type: 'state', snapshot })); socket.onMessage(publish); });
@@ -940,7 +960,7 @@ test('winning the final pot of the tournament still shows the celebration on the
   game.pots = [{ amount: 40, eligibleIds: ['alice', 'bob'], awarded: false }];
   const snapshot: Snapshot = {
     game, you: { id: 'alice', host: false, admin: false, dealing: false, legal: null },
-    hostId: null, boardAdmin: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: true, serverTime: Date.now(),
+    hostId: null, boardAdmin: true, boardLive: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: true, serverTime: Date.now(),
   };
   let publish = () => {};
   await page.routeWebSocket('**/ws', socket => { publish = () => socket.send(JSON.stringify({ type: 'state', snapshot })); socket.onMessage(publish); });
@@ -961,7 +981,7 @@ async function celebrationTable(page: Page, dealing = false, amounts = [100, 40]
   game.pots = amounts.map(amount => ({ amount, eligibleIds: ['alice', 'bob'], awarded: false }));
   const snapshot: Snapshot = {
     game, you: { id: 'alice', host: false, admin: false, dealing, legal: null },
-    hostId: null, boardAdmin: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: true, serverTime: Date.now(),
+    hostId: null, boardAdmin: true, boardLive: true, joinUrl: 'http://127.0.0.1:3301', joinUrls: [], canUndo: true, serverTime: Date.now(),
   };
   let socket: WebSocketRoute;
   const messages: { type: string; potIndex?: number }[] = [];

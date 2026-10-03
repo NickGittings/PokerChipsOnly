@@ -162,3 +162,4 @@ body:has(.player-shell) .connection-banner,body:has(.player-shell) .error-banner
 .player-host-sheet{padding:14px 16px}
 .player-host-sheet>summary{font-size:12px;font-weight:600;color:var(--gold);cursor:pointer;min-height:36px;display:flex;align-items:center}
 .player-host-sheet .host-panel{background:none;border:0;padding:12px 0 0}
+.host-sheet-dock{max-width:520px;margin:0 auto;padding:0 18px 20px}
