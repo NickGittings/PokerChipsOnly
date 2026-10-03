@@ -17,7 +17,7 @@ function socket() {
   return { ws, messages, state: () => ([...messages].reverse().find(m => m.type === 'state') as Extract<ServerMsg, { type: 'state' }>).snapshot, error: () => [...messages].reverse().find(m => m.type === 'error') as Extract<ServerMsg, { type: 'error' }> | undefined };
 }
 type Device = ReturnType<typeof socket>;
-const tokens = ['board_device_token_0001', 'alice_device_token_0001', 'bob_device_token_000001', 'cara_device_token_00001'];
+const tokens = ['board_device_token_0001', 'alice_device_token_0001', 'bob_device_token_000001', 'cara_device_token_00001', 'spare_board_token_00001'];
 function connect(room: Room, index: number, board = false) {
   const device = socket(); room.handle(device.ws, { type: 'join', token: tokens[index], board }); return device;
 }
@@ -56,7 +56,7 @@ describe('authoritative multiplayer room', () => {
     expect(phone.state().joinUrls).toEqual([urls[0]]);
     const before = structuredClone(room.game), undo = structuredClone(room.undoStack);
     room.handle(phone.ws, { type: 'setJoinUrl', url: urls[1] });
-    expect(phone.error()?.message).toMatch(/board admin/i); expect(room.joinUrl).toBe(urls[0]);
+    expect(phone.error()?.message).toMatch(/only the host/i); expect(room.joinUrl).toBe(urls[0]);
     room.handle(board.ws, { type: 'setJoinUrl', url: 'https://example.com' });
     expect(board.error()?.message).toMatch(/available join URLs/i); expect(room.joinUrl).toBe(urls[0]);
     room.handle(board.ws, { type: 'setJoinUrl', url: urls[1] });
@@ -303,7 +303,7 @@ describe('authoritative multiplayer room', () => {
     const { room, board, phones } = table();
     const aliceId = phones[0].state().you.id, before = structuredClone(room.game);
     room.handle(phones[0].ws, { type: 'moveSeat', playerId: aliceId, seat: 5, revision: room.game.revision });
-    expect(phones[0].error()?.message).toMatch(/board admin/i); expect(room.game).toEqual(before);
+    expect(phones[0].error()?.message).toMatch(/only the host/i); expect(room.game).toEqual(before);
     room.handle(board.ws, { type: 'moveSeat', playerId: aliceId, seat: 5, revision: room.game.revision + 1 });
     expect(board.error()?.message).toMatch(/table changed/i); expect(room.game).toEqual(before);
     for (const seat of [-1, 8, 1.5]) {
@@ -341,24 +341,25 @@ describe('authoritative multiplayer room', () => {
     room.handle(unknown.ws, null); expect(unknown.error()?.message).toMatch(/invalid/i);
     const before = structuredClone(room.game);
     room.handle(phones[0].ws, { type: 'startTournament', config: DEFAULT_CONFIG });
-    expect(phones[0].error()?.message).toMatch(/board admin/i); expect(room.game).toEqual(before);
+    expect(phones[0].error()?.message).toMatch(/only the host/i); expect(room.game).toEqual(before);
   });
 
-  it('grants dealer controls to a board even when another device became host', () => {
-    const room = new Room('http://localhost:3000', null), host = connect(room, 1), phone = connect(room, 2), board = connect(room, 0, true);
-    room.handle(host.ws, { type: 'claimSeat', seat: 0, name: 'Alice' });
+  it('elects the first board host even when phones joined before it', () => {
+    const room = new Room('http://localhost:3000', null), alice = connect(room, 1), phone = connect(room, 2);
+    expect(alice.state()).toMatchObject({ hostId: null, you: { host: false, admin: false } });
+    const board = connect(room, 0, true);
+    room.handle(alice.ws, { type: 'claimSeat', seat: 0, name: 'Alice' });
     room.handle(phone.ws, { type: 'claimSeat', seat: 1, name: 'Bob' });
-    expect(board.state().you).toMatchObject({ host: false, admin: true }); start(room, board);
+    expect(alice.state().you.host).toBe(false); expect(board.state().you).toMatchObject({ host: true, admin: true }); start(room, board);
   });
 
-  it('does not retain board permission on a player connection after host failover', () => {
-    const { room, board, phones } = table();
-    room.disconnect(board.ws); expect(phones[0].state().you.host).toBe(true);
-    const setup = connect(room, 0, false);
-    expect(setup.state().you).toMatchObject({ host: false, admin: false });
-    room.handle(setup.ws, { type: 'startTournament', config: DEFAULT_CONFIG });
-    expect(setup.error()?.message).toMatch(/board admin/i);
-    const boardSetup = connect(room, 0, true);
+  it('reserves the host role for the host device after it disconnects', () => {
+    const { room, board, phones } = table(), hostToken = room.hostToken;
+    room.disconnect(board.ws); expect(room.hostToken).toBe(hostToken);
+    expect(phones.map(p => p.state().you)).toMatchObject([{ host: false, admin: false }, { host: false, admin: false }, { host: false, admin: false }]);
+    room.handle(phones[0].ws, { type: 'startTournament', config: DEFAULT_CONFIG });
+    expect(phones[0].error()?.message).toMatch(/only the host/i);
+    const boardSetup = connect(room, 0, true); expect(boardSetup.state().you).toMatchObject({ host: true, admin: true });
     start(room, boardSetup); expect(room.game.totalChips).toBe(1500);
   });
 
@@ -442,7 +443,7 @@ describe('authoritative multiplayer room', () => {
     const { room, board, phones } = table(); start(room, board);
     const before = structuredClone(room.game), undoCount = room.undoStack.length;
     room.handle(phones[0].ws, { type: 'adjustLevel', delta: 1, revision: room.game.revision });
-    expect(phones[0].error()?.message).toMatch(/board admin/i); expect(room.game).toEqual(before);
+    expect(phones[0].error()?.message).toMatch(/only the host/i); expect(room.game).toEqual(before);
     room.handle(board.ws, { type: 'adjustLevel', delta: 1, revision: room.game.revision });
     expect(room.game.pendingLevel).toBe(2); expect(room.game.level).toBe(1);
     expect(room.game.revision).toBe(before.revision + 1); expect(room.undoStack).toHaveLength(undoCount);
@@ -567,9 +568,9 @@ describe('authoritative multiplayer room', () => {
     room.disconnect(duplicate.ws); expect(room.game.players.find(p => p.id === id)?.connected).toBe(false);
   });
 
-  it('elects an available device if the host leaves', () => {
+  it('does not promote another device when the host leaves', () => {
     const { room, board, phones } = table(); room.disconnect(board.ws);
-    expect(phones[0].state().you.host).toBe(true); expect(phones[1].state().you.host).toBe(false);
+    expect(phones.map(p => p.state().you.host)).toEqual([false, false, false]);
   });
 
   it('persists a live hand atomically and restores stacks, turn, identity, and paused clock', () => {
@@ -656,7 +657,7 @@ describe('authoritative multiplayer room', () => {
     const { room, board, phones } = table(); start(room, board);
     const before = structuredClone(room.game);
     room.handle(phones[0].ws, { type: 'newGame', revision: room.game.revision });
-    expect(phones[0].error()?.message).toMatch(/board admin/i); expect(room.game).toEqual(before);
+    expect(phones[0].error()?.message).toMatch(/only the host/i); expect(room.game).toEqual(before);
     room.handle(board.ws, { type: 'newGame', revision: room.game.revision - 1 });
     expect(board.error()?.message).toMatch(/table changed/i); expect(room.game).toEqual(before);
   });
@@ -725,24 +726,25 @@ describe('board-only administration and total time', () => {
     const room = new Room('http://localhost:3000', null), phone = connect(room, 1);
     const board = connect(room, 0, true);
     const check = () => {
-      expect(phone.state().you).toMatchObject({ host: true, admin: false });
+      expect(phone.state().you).toMatchObject({ host: false, admin: false });
       expect(phone.state().canUndo).toBe(false);
       const before = structuredClone(room.game);
       for (const type of ['startTournament', 'setJoinUrl', 'undo', 'pauseClock', 'adjustDuration', 'adjustLevel', 'dealerConfirm', 'awardPot', 'hostAdjust', 'colorUp', 'moveSeat', 'nextHand', 'newGame', 'removePlayer']) {
         room.handle(phone.ws, { type, delta: 15, revision: room.game.revision });
-        expect(phone.error()?.message).toMatch(/board admin/i);
+        expect(phone.error()?.message).toMatch(/only the host/i);
         expect(room.game).toEqual(before);
       }
     };
     check(); room.disconnect(board.ws); check();
   });
 
-  it('isolates board and player connections sharing a saved device token', () => {
+  it('isolates board and player connections sharing a non-host board token', () => {
     const { room, board } = table(); start(room, board);
-    const playerTab = connect(room, 0);
+    const spareBoard = connect(room, 4, true); expect(spareBoard.state().you).toMatchObject({ host: false, admin: true });
+    const playerTab = connect(room, 4);
     expect(playerTab.state().you.admin).toBe(false);
     room.handle(playerTab.ws, { type: 'undo', revision: room.game.revision });
-    expect(playerTab.error()?.message).toMatch(/board admin/i);
+    expect(playerTab.error()?.message).toMatch(/only the host/i);
     expect(board.state().you.admin).toBe(true);
   });
 
@@ -844,7 +846,7 @@ describe('dealer seat removal', () => {
     const playerId = room.game.players[0].id;
     const before = structuredClone(room.game);
     room.handle(phones[1].ws, { type: 'removePlayer', playerId, revision: room.game.revision });
-    expect(phones[1].error()?.message).toMatch(/board admin/);
+    expect(phones[1].error()?.message).toMatch(/only the host/i);
     room.handle(board.ws, { type: 'removePlayer', playerId, revision: -1 });
     expect(board.error()?.message).toMatch(/table changed/);
     room.handle(board.ws, { type: 'removePlayer', playerId: 'unknown', revision: room.game.revision });
@@ -885,7 +887,7 @@ describe('button dealer and hand accounting', () => {
     expect(phones[0].error()?.message).toMatch(/not your turn/); expect(room.game).toEqual(before);
     for (const type of ['dealerConfirm', 'awardPot', 'nextHand']) {
       room.handle(phones[1].ws, { type, potIndex: 0, winnerIds: [phones[1].state().you.id], revision: room.game.revision });
-      expect(phones[1].error()?.message).toMatch(/board admin/); expect(room.game).toEqual(before);
+      expect(phones[1].error()?.message).toMatch(/only the host/i); expect(room.game).toEqual(before);
     }
     room.handle(phones[0].ws, { type: 'dealerConfirm', revision: room.game.revision - 1 });
     expect(phones[0].error()?.message).toMatch(/table changed/); expect(room.game).toEqual(before);
@@ -908,7 +910,7 @@ describe('button dealer and hand accounting', () => {
     expect(room.game.phase).toBe('showdown');
     const before = structuredClone(room.game);
     room.handle(phones[0].ws, { type: 'hostAdjust', playerId: phones[0].state().you.id, delta: 5, revision: room.game.revision });
-    expect(phones[0].error()?.message).toMatch(/board admin/); expect(room.game).toEqual(before);
+    expect(phones[0].error()?.message).toMatch(/only the host/i); expect(room.game).toEqual(before);
     room.handle(phones[0].ws, { type: 'awardPot', potIndex: 0, winnerIds: [phones[1].state().you.id], revision: room.game.revision });
     expect(room.game.phase).toBe('hand-complete');
     expect(room.game.ledger.filter(e => e.kind === 'hand').map(e => e.amount)).toEqual([-10, 20, -10]); assertChips(room.game);
@@ -1000,5 +1002,79 @@ describe('button dealer and hand accounting', () => {
     const recoveredBoard = connect(recovered, 0, true);
     expect(recoveredBoard.state().you.dealing).toBe(true);
     dealer(recovered, recoveredBoard, 'dealerConfirm'); expect(recovered.game.awaitingDeal).toBe(false); assertChips(recovered.game);
+  });
+});
+
+describe('host role', () => {
+  const adminTypes = ['startTournament', 'setJoinUrl', 'undo', 'pauseClock', 'adjustDuration', 'adjustLevel', 'hostAdjust', 'colorUp', 'moveSeat', 'newGame', 'removePlayer'];
+  function handOff(room: Room, from: Device, to: Device) { room.handle(from.ws, { type: 'transferHost', playerId: to.state().you.id }); expect(to.state().you).toMatchObject({ host: true, admin: true }); }
+
+  it('elects only the first board, and lets a phone claim only an empty host role', () => {
+    const room = new Room('http://localhost:3000', null), phone = connect(room, 1);
+    room.handle(phone.ws, { type: 'claimHost' }); expect(phone.state().you).toMatchObject({ host: true, admin: true });
+    const board = connect(room, 0, true), other = connect(room, 2);
+    expect(board.state().you).toMatchObject({ host: false, admin: true });
+    room.handle(other.ws, { type: 'claimHost' }); expect(other.error()?.message).toMatch(/only the host/i);
+    room.handle(board.ws, { type: 'claimHost' }); expect(board.state().you.host).toBe(true); expect(phone.state().you).toMatchObject({ host: false, admin: false });
+  });
+
+  it('transfers host to a connected seated player, who gains admin from their phone', () => {
+    const { room, board, phones } = table(); start(room, board);
+    room.handle(phones[1].ws, { type: 'transferHost', playerId: phones[1].state().you.id }); expect(phones[1].error()?.message).toMatch(/only the host/i);
+    handOff(room, board, phones[0]);
+    expect(board.state()).toMatchObject({ hostId: phones[0].state().you.id, you: { host: false, admin: true } });
+    room.handle(phones[0].ws, { type: 'pauseClock', revision: room.game.revision }); expect(room.game.clockPaused).toBe(true);
+    expect(phones[0].state().canUndo).toBe(true); expect(phones[1].state().canUndo).toBe(false);
+  });
+
+  it('rejects transfers to unknown or disconnected players without changing the host', () => {
+    const { room, board, phones } = table(), hostToken = room.hostToken;
+    room.handle(board.ws, { type: 'transferHost', playerId: 'missing-player' }); expect(board.error()?.message).toMatch(/isn’t connected/i);
+    const bob = phones[1].state().you.id; room.disconnect(phones[1].ws); const before = structuredClone(room.game);
+    room.handle(board.ws, { type: 'transferHost', playerId: bob }); expect(board.error()?.message).toMatch(/isn’t connected/i);
+    room.handle(board.ws, { type: 'transferHost', playerId: board.state().you.id }); expect(board.error()?.message).toMatch(/isn’t connected/i);
+    expect(room.hostToken).toBe(hostToken); expect(room.game).toEqual(before);
+  });
+
+  it('lets only the host turn off board administration, leaving the phone host as sole admin', () => {
+    const { room, board, phones } = table(); start(room, board);
+    room.handle(board.ws, { type: 'setBoardAdmin', enabled: false }); expect(room.boardAdmin).toBe(false); room.handle(board.ws, { type: 'setBoardAdmin', enabled: true });
+    handOff(room, board, phones[0]);
+    for (const device of [board, phones[1]]) { room.handle(device.ws, { type: 'setBoardAdmin', enabled: false }); expect(device.error()?.message).toMatch(/only the host/i); }
+    room.handle(phones[0].ws, { type: 'setBoardAdmin', enabled: 'no' }); expect(phones[0].error()?.message).toMatch(/invalid/i);
+    room.handle(phones[0].ws, { type: 'setBoardAdmin', enabled: false });
+    expect(board.state()).toMatchObject({ boardAdmin: false, canUndo: false, joinUrls: ['http://192.168.1.2:3000'], you: { admin: false } });
+    const before = structuredClone(room.game);
+    for (const type of adminTypes) { room.handle(board.ws, { type, delta: 15, revision: room.game.revision }); expect(board.error()?.message).toMatch(/only the host/i); expect(room.game).toEqual(before); }
+    room.handle(board.ws, { type: 'claimHost' }); expect(board.error()?.message).toMatch(/only the host/i);
+    expect(phones[0].state().canUndo).toBe(true); room.handle(phones[0].ws, { type: 'undo', revision: room.game.revision }); expect(room.game.revision).toBe(before.revision + 1);
+  });
+
+  it('keeps the host role reserved across a reconnect and moves it with a reclaimed seat', () => {
+    const { room, board, phones } = table(); start(room, board); handOff(room, board, phones[0]);
+    room.handle(phones[0].ws, { type: 'setBoardAdmin', enabled: false });
+    const alice = phones[0].state().you.id; room.disconnect(phones[0].ws);
+    expect(phones[1].state().you.host).toBe(false); expect(board.state().you.admin).toBe(false);
+    const back = connect(room, 1); expect(back.state().you).toMatchObject({ host: true, admin: true }); room.disconnect(back.ws);
+    const fresh = socket(); room.handle(fresh.ws, { type: 'join', token: 'alice_replacement_token1' });
+    room.handle(fresh.ws, { type: 'reclaimSeat', playerId: alice });
+    expect(fresh.state()).toMatchObject({ hostId: alice, you: { id: alice, host: true, admin: true } });
+    expect(room.hostToken).toBe('alice_replacement_token1');
+  });
+
+  it('persists host and board access, and defaults board access on for older saves', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'poker-host-')); directories.push(directory);
+    const file = join(directory, 'state.json'), { room, board, phones } = table(file); handOff(room, board, phones[0]);
+    room.handle(phones[0].ws, { type: 'setBoardAdmin', enabled: false });
+    const recovered = new Room('http://192.168.1.2:3000', file);
+    expect(recovered.hostToken).toBe(tokens[1]); expect(recovered.boardAdmin).toBe(false);
+    expect(connect(recovered, 0, true).state().you.admin).toBe(false);
+    const saved = JSON.parse(readFileSync(file, 'utf8')); delete saved.boardAdmin; writeFileSync(file, JSON.stringify(saved));
+    expect(new Room('http://192.168.1.2:3000', file).boardAdmin).toBe(true);
+  });
+
+  it('shares the host player id but never a token', () => {
+    const { room, board, phones } = table(); handOff(room, board, phones[2]);
+    for (const device of [board, ...phones]) { expect(device.state().hostId).toBe(phones[2].state().you.id); for (const token of tokens) expect(JSON.stringify(device.state())).not.toContain(token); }
   });
 });

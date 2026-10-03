@@ -95,7 +95,15 @@ For emulator testing, run a disposable laptop server on port 3000 and enter `10.
 
 ---
 
-## Stage 2 — Explicit host role
+## Stage 2 — Explicit host role ✅
+
+**Status (2026-10-03).** Implemented on branch `stage-2-host-role`. Deviations and details from the plan below:
+- Only the first **board** connection is auto-elected host; phones become host via `transferHost`, or `claimHost` when no host is set. This avoids handing admin to whoever scans the QR first.
+- The `peer.board` half is the room-level `boardAdmin` flag (default on, persisted in `.state.json`, not undoable). Only the host can toggle it via `setBoardAdmin`, so it can't be switched off without a live host.
+- `reclaimSeat` carries the host role to the new device when it retires the host's token, which is the recovery path for a lost host phone.
+- `Snapshot` gained `hostId` (identity id, never a token) and `boardAdmin`. A host phone sees the full `HostPanel` in a collapsed **Host controls** sheet in `PlayerView`.
+- Setup (`/setup`) is still a board connection; starting a tournament from a phone host is left to Stage 3's host UX.
+
 
 `server/room.ts:62` and `:99` compute `admin = peer.board` — admin is a *URL*, not a person. The endgame needs a host device. `Room` already persists `hostToken` and already ships `you.host` in the snapshot; it just isn't wired to permissions.
 

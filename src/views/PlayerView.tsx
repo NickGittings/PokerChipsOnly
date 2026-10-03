@@ -7,6 +7,7 @@ import { BlindTimer } from '../components/BlindTimer';
 import { ActionBar } from '../components/ActionBar';
 import { GameOver, ShowdownModal, StreetModal, showdownModalOpen, streetModalOpen } from '../components/GameModals';
 import { WinCelebration } from '../components/WinCelebration';
+import { HostPanel } from '../components/HostPanel';
 import { HandLog, TableRoster, SeatMarkers, blindClass } from '../components/PokerTable';
 import { useWinCelebration } from '../net/useWinCelebration';
 import '../styles/game.css';
@@ -24,6 +25,7 @@ export function PlayerView({ snapshot, send, connected }: Props) {
     <PlayerHeader game={game} connected={connected} />
     <GameOver snapshot={snapshot} />
     <HandLog game={game} />
+    {you.admin && <details className="game-panel player-host-sheet"><summary>Host controls</summary><HostPanel snapshot={snapshot} send={send} connected={connected} /></details>}
     <WinCelebration celebration={celebration} dismiss={dismiss} />
   </main>;
   return <main className="player-page player-shell">
@@ -37,6 +39,7 @@ export function PlayerView({ snapshot, send, connected }: Props) {
         {notice && <div className="level-notice">{notice}</div>}
         <TableRoster game={game} />
         <HandLog game={game} compact />
+        {you.admin && <details className="game-panel player-host-sheet"><summary>Host controls</summary><HostPanel snapshot={snapshot} send={send} connected={connected} /></details>}
       </div>
       <div className="player-actions">
         {player.status === 'busted' && game.phase === 'hand-complete' && <button type="button" className="game-button primary wide" disabled={!connected} onClick={() => send({ type: 'rebuy' })}>Buy back in for {money(game.config.startingStack)}</button>}
