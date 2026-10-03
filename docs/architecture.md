@@ -53,7 +53,7 @@ const admin = this.isAdmin(peer),   // host token, or a board page while boardAd
              || admin && (!onButton || !this.game.players.find(p => p.id === onButton)?.connected);
 ```
 
-**Admin is the host device, plus board pages by default.** `Room.isAdmin` grants admin to the connection whose token is `hostToken`, and to any `/board`/`/setup` connection while the room-level `boardAdmin` flag is on (the default). Only the first *board* connection is elected host automatically. After that the role moves only deliberately: `claimHost` (allowed for an admin, or anyone when no host is set), `transferHost` (an admin hands it to a connected, seated player), or `reclaimSeat` (when the host's seat is reclaimed on a new device, `hostToken` follows it). `disconnect()` no longer reassigns the host role. The token stays reserved, so the host gets admin back on reconnect. Only the host can toggle `setBoardAdmin`. That means board admin can only be switched off from a live host device, which avoids a lockout. `hostToken` and `boardAdmin` are room-level, like `joinUrl`: they're excluded from undo and don't bump `revision`.
+**Admin is the host device, plus board pages by default.** `Room.isAdmin` grants admin to the connection whose token is `hostToken`, and to any `/board`/`/setup` connection while the room-level `boardAdmin` flag is on (the default). Only the first *board* connection is elected host automatically. After that the role moves only deliberately: `claimHost` (an admin takes it) or `transferHost` (an admin hands it to a connected, seated player). `reclaimSeat` deliberately does *not* move it, so a guest can't take admin by reclaiming an offline host's seat. `disconnect()` no longer reassigns the host role. The token stays reserved, so the host gets admin back on reconnect. Only the host can toggle `setBoardAdmin`, so board admin can only be switched off from a live host device. `boardAdmin` isn't persisted: a server restart always turns it back on, which is the recovery path when the host device is lost. `hostToken` and `boardAdmin` are room-level, like `joinUrl`: they're excluded from undo and don't bump `revision`. When the button player is away, dealer prompts fall back to board pages while board admin is on, otherwise to the host device.
 
 ## Dealer-prompt rotation and board fallback
 
@@ -75,7 +75,7 @@ The player on the button (`dealerId(game)`, `shared/dealer.ts`) is the one who p
 Written atomically (`.tmp` + `renameSync`, mode `0600`) after every accepted change plus a 5s checkpoint interval. Shape (version 2):
 
 ```ts
-{ version: 2, game: GameState, identities: Record<token, {id, name}>, hostToken: string, boardAdmin?: boolean, joinUrl: string }   // boardAdmin defaults to true when absent
+{ version: 3, game: GameState, identities: Record<token, {id, name}>, hostToken: string, joinUrl: string }   // version 2 still loads, with hostToken cleared so the first board is re-elected
 ```
 
 Reconnect tokens live in this file — it is effectively the credential store, which is why it's git-ignored and why the README warns never to edit it live. On load, all players are marked disconnected and the clock is force-paused (`clockPaused = true`) until a human resumes it; older saves missing newer fields (`elapsedMs`, `blindPace`, etc.) are back-filled with defaults rather than rejected, and only a save with the wrong `version` fails startup outright. `STATE_FILE=:memory:` skips persistence entirely for throwaway testing.

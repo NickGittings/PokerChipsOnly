@@ -37,7 +37,7 @@ npm run build && npx cap sync android && JAVA_HOME=/path/to/jdk-21 ./android/gra
 - `GameState.revision` gives optimistic concurrency: every mutating `ClientMsg` carries the `revision` it was computed against, and `Room.handle` rejects stale ones ("The table changed").
 - `assertChips` runs after every accepted transition and enforces chip conservation — total chips in play must reconcile exactly.
 - The undo stack (`server/room.ts`) holds up to 100 full `structuredClone`d `GameState` snapshots, in memory only — it does not survive a server restart.
-- Admin is `Room.isAdmin`: the device holding `hostToken`, plus any `/board`/`/setup` connection while the room's `boardAdmin` flag is on (default). Only a board is auto-elected host; the role then moves only via `claimHost`/`transferHost`/`reclaimSeat`, never on disconnect.
+- Admin is `Room.isAdmin`: the device holding `hostToken`, plus any `/board`/`/setup` connection while the room's `boardAdmin` flag is on (default). Only a board is auto-elected host; the role then moves only via `claimHost`/`transferHost` by an admin, never on disconnect or seat reclaim. `boardAdmin` isn't persisted, so a restart restores board admin.
 
 ## Gotchas
 

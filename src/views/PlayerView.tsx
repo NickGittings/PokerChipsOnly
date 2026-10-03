@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { ClientMsg, GameState, Snapshot } from '../../shared/types';
 import { money } from '../../shared/chips';
 import { placeOf } from '../../shared/standings';
@@ -17,7 +18,9 @@ export function PlayerView({ snapshot, send, connected }: Props) {
   const { game, you } = snapshot;
   const dialogOpen = streetModalOpen(game) || showdownModalOpen(game);
   const { celebration, dismiss } = useWinCelebration(snapshot, connected, dialogOpen);
+  const [hostOpen, setHostOpen] = useState(false);
   const player = game.players.find(p => p.id === you.id);
+  const hostSheet = you.admin && <details className="game-panel player-host-sheet" open={hostOpen} onToggle={e => setHostOpen(e.currentTarget.open)}><summary>Host controls</summary><HostPanel snapshot={snapshot} send={send} connected={connected} /></details>;
   if (!player) return <main className="player-page"><section className="game-panel"><h1>Find your place at the table.</h1><p>Choose a seat to join this game.</p><a className="game-button primary" href="/">Choose a seat →</a></section></main>;
   const pot = game.phase === 'hand-complete' || game.phase === 'tournament-over' ? 0 : game.phase === 'showdown' ? game.pots.filter(p => !p.awarded).reduce((sum, p) => sum + p.amount, 0) : game.players.reduce((sum, p) => sum + p.committedThisHand, 0);
   const notice = levelNotice(game);
@@ -25,7 +28,7 @@ export function PlayerView({ snapshot, send, connected }: Props) {
     <PlayerHeader game={game} connected={connected} />
     <GameOver snapshot={snapshot} />
     <HandLog game={game} />
-    {you.admin && <details className="game-panel player-host-sheet"><summary>Host controls</summary><HostPanel snapshot={snapshot} send={send} connected={connected} /></details>}
+    {hostSheet}
     <WinCelebration celebration={celebration} dismiss={dismiss} />
   </main>;
   return <main className="player-page player-shell">
@@ -39,7 +42,7 @@ export function PlayerView({ snapshot, send, connected }: Props) {
         {notice && <div className="level-notice">{notice}</div>}
         <TableRoster game={game} />
         <HandLog game={game} compact />
-        {you.admin && <details className="game-panel player-host-sheet"><summary>Host controls</summary><HostPanel snapshot={snapshot} send={send} connected={connected} /></details>}
+        {hostSheet}
       </div>
       <div className="player-actions">
         {player.status === 'busted' && game.phase === 'hand-complete' && <button type="button" className="game-button primary wide" disabled={!connected} onClick={() => send({ type: 'rebuy' })}>Buy back in for {money(game.config.startingStack)}</button>}

@@ -582,6 +582,7 @@ test('a phone host gets collapsed host controls that transfer the role and switc
   await sheet.getByText('Host controls', { exact: true }).click();
   await expect(sheet.locator('.host-role')).toContainText('This device');
   await expect(sheet.getByRole('button', { name: 'Make this device host' })).toHaveCount(0);
+  await expect(sheet.getByRole('button', { name: /New game/ })).toHaveCount(0);
   const toggle = sheet.getByLabel('Board screens have admin controls');
   await expect(toggle).toBeChecked(); await toggle.click();
   await expect.poll(() => sent.find(m => m.type === 'setBoardAdmin')).toEqual({ type: 'setBoardAdmin', enabled: false });
