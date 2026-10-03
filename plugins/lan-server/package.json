@@ -1,0 +1,11 @@
+{
+  "name": "@pokerchips/lan-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts", "./diagnostics": "./src/diagnostics.ts" },
+  "types": "src/index.ts",
+  "files": ["src", "ios/Sources", "Package.swift", "README.md"],
+  "peerDependencies": { "@capacitor/core": ">=8.0.0" },
+  "capacitor": { "ios": { "src": "ios" } }
+}

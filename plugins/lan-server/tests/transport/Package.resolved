@@ -1,15 +1,5 @@
 {
-  "originHash" : "d6e45cd62ae072a8c218d9a82caa05770f70d8fad4d63063d943c147de7d5a12",
   "pins" : [
-    {
-      "identity" : "capacitor-swift-pm",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/ionic-team/capacitor-swift-pm.git",
-      "state" : {
-        "revision" : "0b6882e9a3288342aacf36348e5a94e4f1dd7b13",
-        "version" : "8.5.2"
-      }
-    },
     {
       "identity" : "cocoaasyncsocket",
       "kind" : "remoteSourceControl",
@@ -29,15 +19,6 @@
       }
     },
     {
-      "identity" : "osbarcodelib-ios",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/OutSystems/OSBarcodeLib-iOS.git",
-      "state" : {
-        "revision" : "7f9d166289c10601bfbed95cd3ec56019870ce1b",
-        "version" : "2.2.1"
-      }
-    },
-    {
       "identity" : "telegraph",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/Building42/Telegraph.git",
@@ -47,5 +28,5 @@
       }
     }
   ],
-  "version" : 3
+  "version" : 2
 }
