@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { parseOrigin } from '../net/serverOrigin';
+import { localOrigin, parseOrigin } from '../net/serverOrigin';
 import '../styles/game.css';
 export function PairView({ onPair }: { onPair: (origin: string) => void }) {
   const [address, setAddress] = useState(''), [error, setError] = useState(''), [scanning, setScanning] = useState(false);
-  const accept = (input: string) => { const origin = parseOrigin(input); if (origin) onPair(origin); else setError('That doesn’t look like a table address. Try something like 192.168.1.20:3000.'); };
+  const accept = (input: string) => { const origin = parseOrigin(input); if (!origin) setError('That doesn’t look like a table address. Try something like 192.168.1.20:3000.'); else if (!localOrigin(origin)) setError('That address isn’t on your local network. Use the address shown on the table screen.'); else onPair(origin); };
   const scan = async () => {
     setError(''); setScanning(true);
     try {

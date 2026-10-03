@@ -77,7 +77,7 @@ Outcome: a sideloaded iOS app that plays a full game night. The laptop still run
 
 - The Capacitor 8 Android shell uses `com.nickgittings.pokerchipsonly`, API 26 minimum (required by the scanner), portrait orientation, camera permission, and icons/splashes generated from `assets/*.svg`. `assets/icon-foreground.svg` and `icon-background.svg` are derivatives of the committed icon source for adaptive icons.
 - The bundled WebView page uses `http://localhost`, so its LAN `ws://` connection does not require WebView-wide mixed-content permission. Android's SystemBars handles edge-to-edge insets using the existing `viewport-fit=cover` and CSS safe-area rules. Android Back returns from `/board` or `/setup` to the join route, then exits at the root; Back while editing a text field blurs it.
-- **Network policy pending explicit approval:** `android/app/src/main/res/xml/network_security_config.xml` currently permits cleartext only to emulator host `10.0.2.2` and `localhost`. An arbitrary laptop LAN IP such as `192.168.0.239` remains blocked. Android's network-security XML supports exact domains, not a runtime LAN subnet rule; an app-wide `base-config cleartextTrafficPermitted="true"` is the proposed change for pairing with any table. Automatic approval review rejected that broader setting twice. Do not treat this APK as ready for physical LAN pairing until that decision is resolved.
+- **Network policy (decided 2026-10-03, see `docs/decisions/0004-android-app-wide-cleartext.md`):** `network_security_config.xml` sets `base-config cleartextTrafficPermitted="true"` because the XML has no subnet rule and the laptop's LAN IP varies. Unlike iOS `NSAllowsLocalNetworking`, the OS does not limit this to local addresses, so `localOrigin()` in `shared/origin.ts` rejects non-LAN plain-http hosts at pairing (QR and typed). The APK was rebuilt with this config (2026-10-03) but pairing to a real LAN IP has not yet been tested on a phone.
 
 **Verified on this machine:** `npm test` (219 passed), `npm run test:browser` (40 passed), `npm run build`, `npx cap sync android`, and `assembleDebug` with JDK 21. On the Pixel 10 Pro XL API 37.1 emulator (WebView 149), manual pairing to `10.0.2.2:3000` reached the live join screen. Stopping the throwaway server showed the reconnect banner; restarting it restored the connected state. The saved pairing and seat both survived app force-stop/relaunch. Back returned from the table view without exiting after the listener fix. The join controls remained clear of the bars in gesture and three-button navigation. Camera denial showed the scanner's Settings prompt and the app's manual-address fallback.
 
@@ -91,7 +91,7 @@ JAVA_HOME=/path/to/jdk-21 ./android/gradlew -p android assembleDebug
 ~/Library/Android/sdk/platform-tools/adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-For emulator testing, run a disposable laptop server on port 3000 and enter `10.0.2.2:3000` in the pairing form. No physical Android phone was connected for this milestone. Still to verify on a phone after the LAN policy is resolved: QR pairing, a full hand, seat recovery after sleep and relaunch, camera denial, Wi-Fi recovery, Back, and both system navigation modes.
+For emulator testing, run a disposable laptop server on port 3000 and enter `10.0.2.2:3000` in the pairing form. No physical Android phone was connected for this milestone. Still to verify on a phone: QR pairing, a full hand, seat recovery after sleep and relaunch, camera denial, Wi-Fi recovery, Back, and both system navigation modes.
 
 ---
 
@@ -138,7 +138,7 @@ It must serve **both** static HTTP (the built `dist/`) and WebSocket on `/ws` �
 
 - `npm i @capacitor/android && npx cap add android`. Same web bundle — **no UI work**.
 - Kotlin `LanServer` against the identical TS interface: Ktor or NanoHTTPD (both do HTTP + WS), `NsdManager` for mDNS.
-- `network_security_config.xml` permitting cleartext on local subnets.
+- `network_security_config.xml`: reuse the app-wide cleartext `base-config` from Android Stage 1 (decision 0004); the XML cannot scope to subnets.
 - Android 14+ needs a foreground service to keep the listener alive while hosting — the one place Android beats iOS here.
 
 ---
