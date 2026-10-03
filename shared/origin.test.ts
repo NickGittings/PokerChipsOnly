@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseOrigin, wsUrl } from './origin';
+import { localOrigin, parseOrigin, wsUrl } from './origin';
 
 describe('wsUrl', () => {
   it.each([
@@ -32,4 +32,9 @@ describe('parseOrigin', () => {
   ])('%j -> %s', (input, expected) => expect(parseOrigin(input)).toBe(expected));
 
   it.each(['', '   ', 'ftp://192.168.1.20', 'capacitor://localhost', 'http://', 'not a url', 'http:/192.168.1.20', 'host:abc'])('rejects %j', input => expect(parseOrigin(input)).toBeNull());
+});
+
+describe('localOrigin', () => {
+  it.each(['http://192.168.1.20:3000', 'http://10.0.2.2:3000', 'http://172.20.0.5:3000', 'http://169.254.1.1:3000', 'http://100.101.1.2:3000', 'http://127.0.0.1:3000', 'http://localhost:3000', 'http://nicks-mac.local:3000', 'http://nicks-mac:3000', 'http://[::1]:3000', 'http://[fd00::1]:3000', 'http://[fe80::1]:3000', 'https://table.example.com'])('allows %s', origin => expect(localOrigin(origin)).toBe(true));
+  it.each(['http://8.8.8.8:3000', 'http://172.32.0.1:3000', 'http://100.128.0.1:3000', 'http://table.example.com:3000', 'http://[2001:db8::1]:3000'])('rejects %s', origin => expect(localOrigin(origin)).toBe(false));
 });

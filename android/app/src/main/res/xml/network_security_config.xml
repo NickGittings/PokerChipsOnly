@@ -1,8 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Emulator bridge only until LAN cleartext policy is approved. -->
-    <domain-config cleartextTrafficPermitted="true">
-        <domain>10.0.2.2</domain>
-        <domain>localhost</domain>
-    </domain-config>
+    <!-- Tables are plain http/ws on an arbitrary LAN IP and this XML has no subnet rule, so cleartext is app-wide. shared/origin.ts localOrigin() holds pairing to LAN hosts; see docs/decisions/0004. -->
+    <base-config cleartextTrafficPermitted="true" />
 </network-security-config>
