@@ -15,7 +15,7 @@ final class LanTransport: NSObject, ServerWebSocketDelegate, ServerDelegate, Net
         guard server == nil else { throw failure("LanServer is already running; stop before starting again") }
         let files = HTTPAssets(root: assets)
         guard files.file(for: "/") != nil else { throw failure("Bundled public/index.html is missing; run build and cap sync ios") }
-        let candidate = Server()
+        let candidate = TextWebSocketServer()
         candidate.delegateQueue = .main
         candidate.delegate = self
         candidate.webSocketDelegate = self
