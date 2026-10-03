@@ -12,3 +12,4 @@ coverage/
 src/assets/wins/*
 
 .worktrees/
+.swiftpm/
