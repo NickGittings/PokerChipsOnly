@@ -1,4 +1,4 @@
-import { dealerId } from '../shared/dealer';
+import { boardDealsFallback, dealerId } from '../shared/dealer';
 import { isMakeable } from '../shared/chips';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -23,14 +23,15 @@ export class Room {
   undoStack: UndoEntry[] = [];
   joinUrls: string[];
   joinUrl: string;
-  constructor(joinUrls: string | string[], public file: string | null = '.state.json') {
+  constructor(joinUrls: string | string[], public file: string | null = '.state.json', options: { forceBoardAdmin?: boolean } = {}) {
     this.joinUrls = Array.isArray(joinUrls) ? joinUrls : [joinUrls];
     this.joinUrl = this.joinUrls[0];
     if (file && existsSync(file)) {
       const saved = JSON.parse(readFileSync(file, 'utf8'));
       if (saved.version !== 2) throw new Error('Unsupported save file version. Preserve the file before resetting.');
-      // Saves without hostRole elected hosts arbitrarily; re-elect from the first board. Board admin always restarts on, as the recovery path for a lost host.
-      this.game = saved.game; this.identities = saved.identities; this.hostToken = saved.hostRole === 1 ? saved.hostToken : '';
+      // Saves without hostRole elected hosts arbitrarily; re-elect from the first board. forceBoardAdmin (BOARD_ADMIN=on) is the recovery path for a lost host.
+      this.game = saved.game; this.identities = saved.identities; this.hostToken = saved.hostRole === 1 ? saved.hostToken : ''; this.boardAdmin = saved.boardAdmin !== false || !!options.forceBoardAdmin;
+      if (saved.boardAdmin === false && options.forceBoardAdmin) log(this.game, 'Board admin controls restored at server start.');
       this.game.elapsedMs ??= 0; this.game.config.durationMinutes ??= 0;
       this.game.ledger ??= []; this.game.levelStartHand ??= 0; this.game.awaitingDeal ??= false;
       this.game.config.blindPace ??= 'time'; this.game.config.levelHands ??= 10;
@@ -51,19 +52,21 @@ export class Room {
   }
   persist() {
     if (!this.file) return;
-    writeFileSync(this.file + '.tmp', JSON.stringify({ version: 2, hostRole: 1, game: this.game, identities: this.identities, hostToken: this.hostToken, joinUrl: this.joinUrl }), { mode: 0o600 });
+    writeFileSync(this.file + '.tmp', JSON.stringify({ version: 2, hostRole: 1, game: this.game, identities: this.identities, hostToken: this.hostToken, boardAdmin: this.boardAdmin, joinUrl: this.joinUrl }), { mode: 0o600 });
     renameSync(this.file + '.tmp', this.file);
   }
+  hostLive() { return !!this.hostToken && [...this.peers.values()].some(p => p.token === this.hostToken); }
+  deviceName(peer: Peer) { return this.game.players.find(p => p.id === this.identities[peer.token]?.id)?.name ?? (peer.board ? 'A board screen' : 'A device with no seat'); }
   isAdmin(peer: Peer) { return !!this.hostToken && peer.token === this.hostToken || this.boardAdmin && peer.board; }
   send(ws: WebSocket, msg: ServerMsg) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg)); }
   refreshConnections() { for (const p of this.game.players) p.connected = [...this.peers.values()].some(peer => this.identities[peer.token]?.id === p.id); }
   broadcast() {
     this.refreshConnections();
-    const onButton = dealerId(this.game), buttonAway = !onButton || !this.game.players.find(p => p.id === onButton)?.connected, hostId = this.identities[this.hostToken]?.id ?? null, boardLive = [...this.peers.values()].some(p => p.board);
+    const onButton = dealerId(this.game), buttonAway = !onButton || !this.game.players.find(p => p.id === onButton)?.connected, hostId = this.identities[this.hostToken]?.id ?? null, boardLive = [...this.peers.values()].some(p => p.board), hostLive = this.hostLive();
     for (const [ws, peer] of this.peers) {
       const identity = this.identities[peer.token];
-      const admin = this.isAdmin(peer), dealing = !!onButton && identity.id === onButton || buttonAway && (this.boardAdmin && boardLive ? peer.board : peer.token === this.hostToken);
-      this.send(ws, { type: 'state', snapshot: { game: this.game, you: { id: identity.id, host: peer.token === this.hostToken, admin, dealing, legal: legalActions(this.game, identity.id) }, hostId, boardAdmin: this.boardAdmin, boardLive, joinUrl: this.joinUrl, joinUrls: admin ? this.joinUrls : [this.joinUrl], canUndo: admin && this.undoStack.length > 0, serverTime: Date.now() } });
+      const admin = this.isAdmin(peer), dealing = !!onButton && identity.id === onButton || buttonAway && (boardDealsFallback(this.boardAdmin, boardLive) ? peer.board : peer.token === this.hostToken);
+      this.send(ws, { type: 'state', snapshot: { game: this.game, you: { id: identity.id, host: peer.token === this.hostToken, admin, dealing, legal: legalActions(this.game, identity.id) }, hostId, boardAdmin: this.boardAdmin, boardLive, hostLive, joinUrl: this.joinUrl, joinUrls: admin ? this.joinUrls : [this.joinUrl], canUndo: admin && this.undoStack.length > 0, serverTime: Date.now() } });
     }
   }
   disconnect(ws: WebSocket) {
@@ -102,17 +105,19 @@ export class Room {
       if (msg.type === 'claimHost' || msg.type === 'transferHost' || msg.type === 'setBoardAdmin') {
         if (msg.type === 'claimHost') {
           if (!admin) throw new Error('Only the host can do that.');
-          if (peer.token !== this.hostToken && [...this.peers.values()].some(p => p.token === this.hostToken)) throw new Error('The host is still connected. Ask them to hand the role over.');
-          this.hostToken = peer.token;
+          if (peer.token === this.hostToken) return;
+          if (this.hostLive()) throw new Error('The host is still connected. Ask them to hand the role over.');
+          this.hostToken = peer.token; log(this.game, `${this.deviceName(peer)} took the host role.`);
         }
         else if (msg.type === 'transferHost') {
-          if (!admin) throw new Error('Only the host can do that.');
+          if (peer.token !== this.hostToken && (!admin || this.hostLive())) throw new Error(admin ? 'The host is still connected. Ask them to hand the role over.' : 'Only the host can do that.');
           const target = typeof msg.playerId === 'string' && this.game.players.some(p => p.id === msg.playerId) ? [...this.peers.values()].find(p => this.identities[p.token]?.id === msg.playerId) : undefined;
           if (!target) throw new Error('That player isn’t connected. Hand the host role to someone at the table.');
-          this.hostToken = target.token;
+          this.hostToken = target.token; log(this.game, `${this.deviceName(peer)} handed the host role to ${this.deviceName(target)}.`);
         } else {
           if (peer.token !== this.hostToken) throw new Error('Only the host can change board access.');
           if (typeof msg.enabled !== 'boolean') throw new Error('Invalid board access setting.');
+          if (this.boardAdmin !== msg.enabled) log(this.game, `Host turned board admin controls ${msg.enabled ? 'on' : 'off'}.`);
           this.boardAdmin = msg.enabled;
         }
         this.broadcast(); this.safePersist(); return;

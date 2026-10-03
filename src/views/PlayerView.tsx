@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import type { ClientMsg, GameState, Snapshot } from '../../shared/types';
 import { money } from '../../shared/chips';
 import { placeOf } from '../../shared/standings';
@@ -13,14 +12,13 @@ import { HandLog, TableRoster, SeatMarkers, blindClass } from '../components/Pok
 import { useWinCelebration } from '../net/useWinCelebration';
 import '../styles/game.css';
 
-type Props = { snapshot: Snapshot; send: (msg: ClientMsg) => void; connected: boolean };
-export function PlayerView({ snapshot, send, connected }: Props) {
+type Props = { snapshot: Snapshot; send: (msg: ClientMsg) => void; connected: boolean; hostOpen: boolean; onHostToggle: (open: boolean) => void };
+export function PlayerView({ snapshot, send, connected, hostOpen, onHostToggle }: Props) {
   const { game, you } = snapshot;
   const dialogOpen = streetModalOpen(game) || showdownModalOpen(game);
   const { celebration, dismiss } = useWinCelebration(snapshot, connected, dialogOpen);
-  const [hostOpen, setHostOpen] = useState(false);
   const player = game.players.find(p => p.id === you.id);
-  const hostSheet = <HostSheet snapshot={snapshot} send={send} connected={connected} open={hostOpen} onToggle={setHostOpen} />;
+  const hostSheet = <HostSheet snapshot={snapshot} send={send} connected={connected} open={hostOpen} onToggle={onHostToggle} />;
   if (!player) return <main className="player-page"><section className="game-panel"><h1>Find your place at the table.</h1><p>Choose a seat to join this game.</p><a className="game-button primary" href="/">Choose a seat →</a></section></main>;
   const pot = game.phase === 'hand-complete' || game.phase === 'tournament-over' ? 0 : game.phase === 'showdown' ? game.pots.filter(p => !p.awarded).reduce((sum, p) => sum + p.amount, 0) : game.players.reduce((sum, p) => sum + p.committedThisHand, 0);
   const notice = levelNotice(game);
