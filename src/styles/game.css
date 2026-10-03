@@ -154,3 +154,12 @@ body:has(.player-shell) .connection-banner,body:has(.player-shell) .error-banner
 @keyframes win-pop{from{opacity:0;transform:scale(.85) translateY(8px)}to{opacity:1;transform:scale(1) translateY(0)}}
 
 .celebration-alerts{position:absolute;inset:0;pointer-events:none}.celebration-alerts .connection-banner,.celebration-alerts .error-banner{pointer-events:auto}
+.host-role{display:flex;flex-direction:column;gap:8px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid #ffffff14}
+.host-role p{margin:0;font-size:12px}
+.host-role b{color:var(--text);font-weight:600}
+.host-toggle{display:flex;align-items:center;gap:10px;font-size:12px;min-height:44px;cursor:pointer}
+.host-panel .host-toggle input{width:20px;height:20px;min-height:0;padding:0;accent-color:var(--gold)}
+.player-host-sheet{padding:14px 16px}
+.player-host-sheet>summary{font-size:12px;font-weight:600;color:var(--gold);cursor:pointer;min-height:36px;display:flex;align-items:center}
+.player-host-sheet .host-panel{background:none;border:0;padding:12px 0 0}
+.host-sheet-dock{max-width:520px;margin:0 auto;padding:0 18px 20px}

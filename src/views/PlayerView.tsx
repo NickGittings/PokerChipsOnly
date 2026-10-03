@@ -7,16 +7,18 @@ import { BlindTimer } from '../components/BlindTimer';
 import { ActionBar } from '../components/ActionBar';
 import { GameOver, ShowdownModal, StreetModal, showdownModalOpen, streetModalOpen } from '../components/GameModals';
 import { WinCelebration } from '../components/WinCelebration';
+import { HostSheet } from '../components/HostPanel';
 import { HandLog, TableRoster, SeatMarkers, blindClass } from '../components/PokerTable';
 import { useWinCelebration } from '../net/useWinCelebration';
 import '../styles/game.css';
 
-type Props = { snapshot: Snapshot; send: (msg: ClientMsg) => void; connected: boolean };
-export function PlayerView({ snapshot, send, connected }: Props) {
+type Props = { snapshot: Snapshot; send: (msg: ClientMsg) => void; connected: boolean; hostOpen: boolean; onHostToggle: (open: boolean) => void };
+export function PlayerView({ snapshot, send, connected, hostOpen, onHostToggle }: Props) {
   const { game, you } = snapshot;
   const dialogOpen = streetModalOpen(game) || showdownModalOpen(game);
   const { celebration, dismiss } = useWinCelebration(snapshot, connected, dialogOpen);
   const player = game.players.find(p => p.id === you.id);
+  const hostSheet = <HostSheet snapshot={snapshot} send={send} connected={connected} open={hostOpen} onToggle={onHostToggle} />;
   if (!player) return <main className="player-page"><section className="game-panel"><h1>Find your place at the table.</h1><p>Choose a seat to join this game.</p><a className="game-button primary" href="/">Choose a seat →</a></section></main>;
   const pot = game.phase === 'hand-complete' || game.phase === 'tournament-over' ? 0 : game.phase === 'showdown' ? game.pots.filter(p => !p.awarded).reduce((sum, p) => sum + p.amount, 0) : game.players.reduce((sum, p) => sum + p.committedThisHand, 0);
   const notice = levelNotice(game);
@@ -24,6 +26,7 @@ export function PlayerView({ snapshot, send, connected }: Props) {
     <PlayerHeader game={game} connected={connected} />
     <GameOver snapshot={snapshot} />
     <HandLog game={game} />
+    {hostSheet}
     <WinCelebration celebration={celebration} dismiss={dismiss} />
   </main>;
   return <main className="player-page player-shell">
@@ -37,6 +40,7 @@ export function PlayerView({ snapshot, send, connected }: Props) {
         {notice && <div className="level-notice">{notice}</div>}
         <TableRoster game={game} />
         <HandLog game={game} compact />
+        {hostSheet}
       </div>
       <div className="player-actions">
         {player.status === 'busted' && game.phase === 'hand-complete' && <button type="button" className="game-button primary wide" disabled={!connected} onClick={() => send({ type: 'rebuy' })}>Buy back in for {money(game.config.startingStack)}</button>}

@@ -16,8 +16,9 @@ import { JoinView } from './views/JoinView';
 import { LobbyView } from './views/LobbyView';
 import { BoardView } from './views/BoardView';
 import { PlayerView } from './views/PlayerView';
+import { HostSheet } from './components/HostPanel';
 export function App() {
-  const [alertHost, setAlertHost] = useState<HTMLDivElement | null>(null);
+  const [alertHost, setAlertHost] = useState<HTMLDivElement | null>(null), [hostOpen, setHostOpen] = useState(false);
   const { route, navigate } = useRoute(), [origin, setOrigin] = useState(serverOrigin);
   const board = route === '/board', setup = route === '/setup';
   // A new table starts at the player view: a remembered /board or /setup would otherwise carry admin over to a table nobody chose it for.
@@ -69,6 +70,7 @@ export function App() {
   </>;
   return <AlertHostContext.Provider value={setAlertHost}>{showHeader && <header className="app-header"><a href="/" className="brand"><span className="brand-chip">♣</span><span>POKERCHIPS <small>ONLY</small></span></a><nav><span className={connected ? 'connection connected' : 'connection'}><i/>{connected ? 'Table connected' : 'Connecting…'}</span><a href={board ? '/' : '/board'}>{board ? 'Join table' : 'Table view'} <span>↗</span></a></nav></header>}
     {alertHost ? createPortal(alerts, alertHost) : alerts}
-    {!props ? <main className="loading"><span className="brand-chip">♣</span><h1>Taking our seats…</h1><p>Connecting to your local table.</p></main> : setup && snapshot!.game.phase === 'lobby' ? <SetupView {...props}/> : board || setup && snapshot!.game.phase !== 'lobby' ? <BoardView {...props}/> : seated ? snapshot!.game.phase === 'lobby' ? <LobbyView {...props}/> : <PlayerView {...props}/> : <JoinView {...props}/>}
+    {!props ? <main className="loading"><span className="brand-chip">♣</span><h1>Taking our seats…</h1><p>Connecting to your local table.</p></main> : setup && snapshot!.game.phase === 'lobby' ? <SetupView {...props}/> : board || setup && snapshot!.game.phase !== 'lobby' ? <BoardView {...props}/> : seated ? snapshot!.game.phase === 'lobby' ? <LobbyView {...props}/> : <PlayerView {...props} hostOpen={hostOpen} onHostToggle={setHostOpen}/> : <JoinView {...props}/>}
+    {props && !board && !setup && !(seated && snapshot!.game.phase !== 'lobby') && <div className="host-sheet-dock"><HostSheet {...props} open={hostOpen} onToggle={setHostOpen}/></div>}
     <footer className="app-footer"><span>REAL CARDS. DIGITAL CHIPS.</span>{changeTable}<span>Made for your home table <span className="gold-text">♣</span></span></footer></AlertHostContext.Provider>;
 }

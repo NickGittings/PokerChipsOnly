@@ -30,9 +30,9 @@ Contributor-facing detail that `README.md` (an operator manual) doesn't cover. S
 
 Every message is a discriminated union on `type`:
 
-- **`ClientMsg`** — `join`, seat lifecycle (`claimSeat`, `leaveSeat`, `reclaimSeat`, `lateBuyIn`, `rebuy`), gameplay (`action`, `dealerConfirm`, `nextHand`, `awardPot`), admin (`startTournament`, `hostAdjust`, `adjustLevel`, `adjustDuration`, `colorUp`, `removePlayer`, `moveSeat`, `newGame`, `undo`, `pauseClock`, `setJoinUrl`).
+- **`ClientMsg`** — `join`, seat lifecycle (`claimSeat`, `leaveSeat`, `reclaimSeat`, `lateBuyIn`, `rebuy`), gameplay (`action`, `dealerConfirm`, `nextHand`, `awardPot`), admin (`startTournament`, `hostAdjust`, `adjustLevel`, `adjustDuration`, `colorUp`, `removePlayer`, `moveSeat`, `newGame`, `undo`, `pauseClock`, `setJoinUrl`), host role (`claimHost`, `transferHost`, `setBoardAdmin`).
 - **`ServerMsg`** — almost always `{ type: 'state', snapshot: Snapshot }`; `error` and `event` exist but `state` carries everything. There are no deltas — a full `Snapshot` is rebuilt and sent to *every* connected peer on every accepted change (`Room.broadcast()`), personalized per recipient.
-- **`Snapshot`** = `{ game: GameState, you: { id, host, admin, dealing, legal }, joinUrl, joinUrls, canUndo, serverTime }`. `game` is the same object for everyone; `you` is computed per-connection.
+- **`Snapshot`** = `{ game: GameState, you: { id, host, admin, dealing, legal }, hostId, boardAdmin, boardLive, hostLive, joinUrl, joinUrls, canUndo, serverTime }`. `game` is the same object for everyone; `you` is computed per-connection. `hostId` is the host device's identity id (never its token); `boardLive`/`hostLive` say whether any board page / the host device is connected.
 
 Mutating messages that touch `GameState` (see the `needsRevision` list in `room.ts`) must carry the `revision` they were computed against; a stale one is rejected rather than merged. This is the app's entire concurrency-control story, and it's why the client always re-renders from the latest `Snapshot` rather than doing optimistic local mutation.
 
@@ -48,16 +48,19 @@ There is no user table and no login. Three roles, distinguished purely by **whic
 
 ```ts
 // server/room.ts — Room.broadcast()
-const admin = peer.board,
+const admin = this.isAdmin(peer),   // host token, or a board page while boardAdmin is on
       dealing = !!onButton && identity.id === onButton
-             || peer.board && (!onButton || !this.game.players.find(p => p.id === onButton)?.connected);
+             || buttonAway && (boardDealsFallback(this.boardAdmin, boardLive) ? peer.board : peer.token === this.hostToken);
+// buttonAway: no button seat, or its player is disconnected. boardLive: any board/setup page is connected.
 ```
 
-**Admin is a property of the connection, not a person** — anyone who opens `/board` on the LAN is admin. `hostToken` and `you.host` already exist in the snapshot (`disconnect()` reassigns `hostToken` to a remaining peer, arbitrarily) but nothing currently gates a permission on it. `docs/decisions/0001-lan-phone-host.md` and Stage 2 of `docs/native-app-plan.md` are about turning this into a real, identity-based host role — that work will tighten the security model for the web app too, not just enable native hosting.
+**Admin is the host device, plus board pages by default.** `Room.isAdmin` grants admin to the connection whose token is `hostToken`, and to any `/board`/`/setup` connection while the room-level `boardAdmin` flag is on (the default). Only the first *board* connection is elected host automatically. After that the role moves only deliberately: `transferHost` (the host hands it to a connected, seated player) or, only while the host is offline, `claimHost`/`transferHost` from another admin. Each change, and each `setBoardAdmin`, is written to the hand log. `reclaimSeat` deliberately does *not* move it, so a guest can't take admin by reclaiming an offline host's seat. `disconnect()` no longer reassigns the host role. The token stays reserved, so the host gets admin back on reconnect. Only the host can toggle `setBoardAdmin`, so board admin can only be switched off from a live host device. `boardAdmin` is persisted; starting the server with `BOARD_ADMIN=on` (`Room`'s `forceBoardAdmin` option) turns it back on, which is the recovery path when the host device is lost. `hostToken` and `boardAdmin` are room-level, like `joinUrl`: they're excluded from undo and don't bump `revision`. When the button player is away, dealer prompts fall back to board pages while board admin is on and a board is connected, otherwise to the host device. `boardDealsFallback`/`fallbackDealerName` in `shared/dealer.ts` hold that rule for both server and client. If the host is itself the away button player with board admin off, nobody can deal until it reconnects or the server restarts. That's the single-host trade-off accepted in `docs/decisions/0001-lan-phone-host.md`.
+
+A player tab in the same browser as the host board shares its token, so it is the host device too and has admin. A phone host sees `HostPanel` in a collapsed **Host controls** sheet on every player route (lobby, join, and in-game).
 
 ## Dealer-prompt rotation and board fallback
 
-The player on the button (`dealerId(game)`, `shared/dealer.ts`) is the one who physically deals — they get "deal the hole cards" / street / award-pot prompts on their own phone (`you.dealing`). If that seat is empty or its device has disconnected, `dealing` falls back to `true` for every `board` connection instead, so the table view picks up the prompt (see the `dealing` expression above). This is why a sleeping dealer's phone reconnecting mid-hand needs to reclaim `dealing`, not just reconnect the socket.
+The player on the button (`dealerId(game)`, `shared/dealer.ts`) is the one who physically deals — they get "deal the hole cards" / street / award-pot prompts on their own phone (`you.dealing`). If that seat is empty or its device has disconnected, `dealing` falls back to every `board` connection while board admin is on and a board is connected, otherwise to the host device (see the `dealing` expression above). This is why a sleeping dealer's phone reconnecting mid-hand needs to reclaim `dealing`, not just reconnect the socket.
 
 ## Identity and seat reclaim
 
@@ -75,7 +78,7 @@ The player on the button (`dealerId(game)`, `shared/dealer.ts`) is the one who p
 Written atomically (`.tmp` + `renameSync`, mode `0600`) after every accepted change plus a 5s checkpoint interval. Shape (version 2):
 
 ```ts
-{ version: 2, game: GameState, identities: Record<token, {id, name}>, hostToken: string, joinUrl: string }
+{ version: 2, hostRole: 1, game: GameState, identities: Record<token, {id, name}>, hostToken: string, boardAdmin: boolean, joinUrl: string }   // a save without hostRole loads with hostToken cleared, so the first board is re-elected
 ```
 
 Reconnect tokens live in this file — it is effectively the credential store, which is why it's git-ignored and why the README warns never to edit it live. On load, all players are marked disconnected and the clock is force-paused (`clockPaused = true`) until a human resumes it; older saves missing newer fields (`elapsedMs`, `blindPace`, etc.) are back-filled with defaults rather than rejected, and only a save with the wrong `version` fails startup outright. `STATE_FILE=:memory:` skips persistence entirely for throwaway testing.

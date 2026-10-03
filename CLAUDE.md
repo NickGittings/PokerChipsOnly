@@ -37,7 +37,7 @@ npm run build && npx cap sync android && JAVA_HOME=/path/to/jdk-21 ./android/gra
 - `GameState.revision` gives optimistic concurrency: every mutating `ClientMsg` carries the `revision` it was computed against, and `Room.handle` rejects stale ones ("The table changed").
 - `assertChips` runs after every accepted transition and enforces chip conservation — total chips in play must reconcile exactly.
 - The undo stack (`server/room.ts`) holds up to 100 full `structuredClone`d `GameState` snapshots, in memory only — it does not survive a server restart.
-- Admin today is granted by connection type (`peer.board`, i.e. being on `/board` or `/setup`), not by identity. See `docs/decisions/` for where this is heading.
+- Admin is `Room.isAdmin`: the device holding `hostToken`, plus any `/board`/`/setup` connection while the room's `boardAdmin` flag is on (default). Only a board is auto-elected host; the role then moves only via `claimHost`/`transferHost` by an admin, never on disconnect or seat reclaim, and never away from a connected host except by the host itself. `boardAdmin` is persisted; `BOARD_ADMIN=on npm start` restores it.
 
 ## Gotchas
 

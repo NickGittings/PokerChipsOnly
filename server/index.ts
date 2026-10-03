@@ -9,7 +9,7 @@ import { joinUrlCandidates } from './joinUrls';
 const port = Number(process.env.PORT ?? 3000);
 const clientPort = process.env.CLIENT_PORT ?? String(port);
 const joinUrls = joinUrlCandidates(networkInterfaces(), clientPort, process.env.LAN_URL);
-const room = new Room(joinUrls, process.env.STATE_FILE === ':memory:' ? null : process.env.STATE_FILE ?? '.state.json');
+const room = new Room(joinUrls, process.env.STATE_FILE === ':memory:' ? null : process.env.STATE_FILE ?? '.state.json', { forceBoardAdmin: process.env.BOARD_ADMIN === 'on' });
 const app = express(), server = createServer(app);
 app.get('/api/health', (_req, res) => res.json({ ok: true, joinUrl: room.joinUrl, phase: room.game.phase }));
 const dist = resolve('dist');
